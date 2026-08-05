@@ -55,7 +55,7 @@
   var settings = { styleIndex: 0, bendPct: 35, hDistortPct: 0, vDistortPct: 0, showAdvanced: false, verticalAxis: false, preserveWidth: true, preserveHeight: false, anchorIndex: 0, hideOriginal: false, deleteOriginal: false, replaceOriginal: false, previewOpacity: 55, dielineSpotNames: ['CutContour', 'CutContour2', 'dieline'], svgWarpPath: '', svgBoundsPath: '' };
   var json = ESON.stringify(settings);
   out.jsonBytes = json.length;
-  out.stringifyUs = 'see benchmark (106us)';
+  out.stringifyUs = 'see benchmark (~105-141 us depending on payload)';
   var packs = pack(json);
   out.stage1 = stage(packs, json.length);
   var returned = lib.evalJson();

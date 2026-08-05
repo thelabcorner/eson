@@ -1,7 +1,7 @@
 // ESON facade - capability-adaptive JSON layer for ExtendScript.
 //
 // Lanes:
-//   parse()             strict eval-free parser (RFC 8259, no execution surface)
+//   parse()             strict RFC 8259 parser (eval-gated: pre-scan + sanitize + eval w/ SyntaxError catch)
 //   stringify()         native-assisted: normalize -> toSource/uneval -> linear
 //                       rewrite; JSON2 fallback (never runs user code twice)
 //   stringifyFast()     preflight + raw native source for certified-inert data

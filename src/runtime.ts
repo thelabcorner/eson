@@ -2,7 +2,7 @@
 // pre-scan. Everything else (rewrite, trusted codecs, stringifyFast, caps
 // detection, the native-source machinery, the benchmark block) is pruned by
 // the bundler's tree-shaking. Used for the COM tool's install wrapper: a
-// ~20KB vendor instead of 58.6KB cuts the per-invocation compile.
+// ~15.4KB vendor instead of 53.1KB cuts the per-invocation compile.
 import { parseJson } from './parse';
 import { stringifyJson } from './stringify';
 import { Json2Api } from './types';
