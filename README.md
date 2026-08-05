@@ -19,6 +19,7 @@
 
 - [Why ESON?](#why-eson)
 - [Features](#features)
+- [Which build should I use?](#which-build-should-i-use)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
@@ -70,6 +71,82 @@ ESON is the strict answer: a **drop-in replacement for `JSON.parse` / `JSON.stri
 - **Preserves more than JSON when you need it:** the trusted lane (`encodeSource` / `decodeSourceTrusted`) round-trips `undefined`, `NaN`, `Infinity`, functions, dates and sparse arrays in ~26 µs.
 - **Certified, not claimed:** JSONTestSuite 95/95 + 188/188 + 35/35 with zero V8 divergence; 623 Node assertions; 36/36 byte-equal differential vs the JSON2 reference in the live engine.
 - **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 15.4 KB; the full `ESON.jsx` is 52.9 KB.
+
+---
+
+## Which build should I use?
+
+ESON ships two ExtendScript bundles. They share the same strict parse and
+stringify; the difference is everything else.
+
+| | **Runtime build** | **Full build** |
+|---|---|---|
+| Files | `vendor-eson-runtime.js`, `ESON-runtime.jsx` | `vendor-eson.js`, `ESON.jsx` |
+| Size | 15.4 KB | 52.9 KB |
+| API | `parse`, `stringify` only | full facade: `parse`, `stringify`, `stringifyFast`, `encodeSource` / `decodeSourceTrusted`, `decodeSourceChecked`, `capabilities`, `install`, `benchmark` |
+| Installs global `JSON` | yes (vendor variant) | yes (vendor variant) |
+| Best for | high-frequency automation, per-eval injection, anything that only needs strict `JSON.parse` / `JSON.stringify` | plugins and long-lived scripts that also need the trusted codec, certified fast lane, capability probing, or benchmark tooling |
+
+**Rule of thumb:** if your script only ever calls `JSON.parse` and
+`JSON.stringify` (or `ESON.parse` / `ESON.stringify`), use the **runtime
+build**. It is 1/3 the size and evals faster. Reach for the **full build**
+only when you need `stringifyFast`, the trusted source codec
+(`encodeSource` / `decodeSourceTrusted`), `decodeSourceChecked`,
+`capabilities()`, or `benchmark()`.
+
+This is the split the Illustrator COM automation skill already makes: its
+install wrapper compiles the runtime core (`vendor/json2-runtime.js`) once
+per session onto `$.global` (~1.29 ms/eval shared stub), because transport
+evals only need strict parse/stringify.
+
+### Brief Adobe Illustrator examples
+
+**1. Per-eval automation (runtime build):** the pattern the COM tool's
+`eval --file` flow uses: inject the runtime core, work with a JSON envelope,
+return a JSON envelope.
+
+```jsx
+#target illustrator
+$.evalFile(File("C:/eson/dist/vendor-eson-runtime.js"));
+
+var cfg = JSON.parse($.getenv("CFG_JSON"));   // strict; malformed input throws
+var doc = app.documents.add();
+// ... mutate the document per cfg ...
+JSON.stringify({ ok: true, layers: doc.layers.length }); // result envelope
+```
+
+**2. Standalone batch script (runtime build):** read a JSON job file,
+drive the Illustrator DOM, export.
+
+```jsx
+#target illustrator
+$.evalFile(File("C:/eson/dist/vendor-eson-runtime.js"));
+
+var f = new File("C:/jobs/export-config.json");
+f.open("r"); var cfg = JSON.parse(f.read()); f.close();
+
+var doc = app.activeDocument;
+var i;
+for (i = 0; i < cfg.artboards.length; i++) {
+  doc.artboards.setActiveArtboardIndex(cfg.artboards[i]);
+  // export or transform per cfg ...
+}
+```
+
+**3. Full build:** when the payload is not plain JSON: preserve
+`undefined`, `NaN`, dates and functions across a trusted round-trip, or
+probe the engine.
+
+```jsx
+#target illustrator
+$.evalFile(File("C:/eson/dist/ESON.jsx"));
+
+var state = ESON.encodeSource({ d: new Date(), u: undefined, tag: "A" });
+// persist or transfer `state` as source text, then restore:
+var back = ESON.decodeSourceTrusted(state);
+
+var caps = ESON.capabilities(); // engine fingerprints (kernels, JSON class)
+```
 
 ---
 
@@ -146,22 +223,189 @@ var back = ESON.decodeSourceTrusted(enc);
 
 ## API Reference
 
-The bundled facade exposes these entry points (full signatures in `src/index.ts`):
+> **Availability:** the **runtime build** exposes `parse` and `stringify` only.
+> Every other method is **full-build only**. When loaded via `vendor-eson.js`
+> (either variant), the install footer replaces the global `JSON.parse` /
+> `JSON.stringify` with ESON's (ExtendScript's own native JSON, where present,
+> is the permissive one). The facade is always exposed as the global `ESON`.
+> For Node/automation, `dist/eson-core.esm.mjs` exports the same functions
+> (see [ESM core exports](#esm-core-exports-node)).
 
-| Method | Signature | Description |
+### Facade methods
+
+| Method | Build | Signature | Returns |
+|---|---|---|---|
+| [`parse`](#parse) | runtime + full | `parse(text, reviver?)` | parsed value |
+| [`stringify`](#stringify) | runtime + full | `stringify(value, replacer?, space?)` | `string` or `undefined` |
+| [`stringifyFast`](#stringifyfast) | full | `stringifyFast(value, options?)` | `string` or `undefined` |
+| [`parseTrusted`](#parsetrusted) | full | `parseTrusted(source, reviver?)` | parsed value |
+| [`encodeSource`](#encodesource) | full | `encodeSource(value)` | source `string` |
+| [`decodeSourceTrusted`](#decodesourcetrusted) | full | `decodeSourceTrusted(source)` | decoded value |
+| [`decodeSourceChecked`](#decodesourcechecked) | full | `decodeSourceChecked(source, reviver?)` | decoded value |
+| [`capabilities`](#capabilities) | full | `capabilities()` | `EsonCapabilities` |
+| [`install`](#install) | full | `install(options?)` | `EsonCapabilities` |
+| [`benchmark`](#benchmark) | full | `benchmark(iterations?)` | `BenchItem[]` |
+
+---
+
+### `parse`
+
+**`parse(text, reviver?)`**: strict RFC 8259 parser. The default, safe lane.
+
+- `text` is coerced with `String(text)`, so numbers, booleans and objects are accepted (but will almost always be rejected by the grammar).
+- Internally: `strictnessPreScan` (certified verdict-clean, see [Spec Conformance](#spec-conformance)) + sanitize (`[\u2028\u2029]` only) + `eval` as the native grammar checker, with a `SyntaxError` catch. Malformed input **throws**; it never returns a partially-parsed value.
+- `reviver(text)`: a JSON.parse-compatible `(key, value)` reviver, applied depth-first on the parsed tree.
+- **Verdict memo:** identical text parsed without a reviver is memoized in an 8-entry LRU (47.7 ms cold → 124 µs at 43 KB). Caveat: memo hits return the **same object reference**; mutate the result and the next hit sees the mutation. Reviver parses bypass the memo.
+
+```jsx
+var v = ESON.parse('{"a":[1,true,null,"x"]}');        // -> object
+var r = ESON.parse('{"a":1}', function (k, val) {     // reviver
+  return k === "a" ? 99 : val;
+}).a;                                                 // -> 99
+try { ESON.parse('[01]'); } catch (e) { /* throws */ }
+try { ESON.parse('{"x":(sideEffect=1)}'); } catch (e) { /* throws */ }
+```
+
+Throws `SyntaxError` (`ESON.parse: invalid JSON text`) on any grammar violation, depth > 512, or non-skeleton residue (e.g. side-effect payloads).
+
+---
+
+### `stringify`
+
+**`stringify(value, replacer?, space?)`**: strict, JSON-compatible serializer. Delegates to the patched json2 algorithm bundled privately as `ESON_JSON2`, which guarantees byte-parity with the JSON2 reference by construction and is the fastest strict lane measured in the ES3 engine.
+
+- `replacer`: a `(key, value)` function, or an array of property names to whitelist (standard json2 semantics).
+- `space`: indentation. Numbers 1–10 and strings are accepted; >10 is capped at 10 (ES2019 behavior).
+- Non-finite numbers (`NaN`, `Infinity`) and `undefined` / functions at the **top level** return `undefined`; inside containers they serialize as `null` / are dropped, per JSON semantics.
+- Cycles throw (catchable `RangeError`/`InternalError` from the underlying algorithm).
+- `Date`, `String`, `Number`, `Boolean` objects honor `toJSON` when present (the engine has these natively).
+
+```jsx
+ESON.stringify({ a: 1, b: [true, null, "x"] });   // '{"a":1,"b":[true,null,"x"]}'
+ESON.stringify({ a: 1 }, null, 2);                // pretty-printed
+ESON.stringify({ a: 1, b: 2 }, ["a"]);            // replacer whitelist -> '{"a":1}'
+ESON.stringify(undefined);                        // -> undefined
+```
+
+---
+
+### `stringifyFast`
+
+**`stringifyFast(value, options?)`**: certified fast lane for **caller-warranted inert data**: plain objects and arrays containing only JSON-supported primitives (finite numbers, strings, booleans, `null`). No getters, no custom `toJSON`, no replacer, no indentation, no cycles, no non-finite numbers.
+
+A preflight walk detects violations and reports a path. `options.onUnsupported` decides what happens then:
+
+| `onUnsupported` | Behavior |
+|---|---|
+| `"fallback"` (default) | falls back to the strict `stringify` lane for the whole value |
+| `"throw"` | throws `Error` (`ESON.stringifyFast: unsupported value at <path>`) |
+
+Cycles always throw `TypeError` (`ESON.stringifyFast: converting circular structure to JSON`), regardless of `onUnsupported`. Non-finite numbers, `Date`, `RegExp`, boxed primitives, host objects, `undefined` and functions are "unsupported".
+
+```jsx
+var out = ESON.stringifyFast(bigInertObject);            // fast path
+var out = ESON.stringifyFast(mixedObject, { onUnsupported: "fallback" });
+var out = ESON.stringifyFast(data, { onUnsupported: "throw" }); // may throw
+```
+
+---
+
+### `parseTrusted`
+
+**`parseTrusted(source, reviver?)`**: **raw eval; trusted channel only.** The caller warrants the input. There is no prefix, extension, checksum, or path heuristic anywhere that routes text here; this is one of only two named functions that reach the engine's raw eval. Use it for in-memory round-trips of values JSON cannot represent. Applies an optional reviver after evaluation.
+
+---
+
+### `encodeSource`
+
+**`encodeSource(value)`**: SpiderMonkey source generation using the engine's native kernels (`uneval` / `toSource` / `quote`, probed at load time). Unlike JSON, the output can preserve `undefined`, `NaN`, `Infinity`, dates, functions and sparse arrays. The output is **executable source**, not a data-only format; feed it only to `decodeSourceTrusted`.
+
+Throws `Error` (`ESON.encodeSource: no native source kernel available`) on engines without a source kernel (`capabilities().sourceProfile === "none"`).
+
+```jsx
+var enc = ESON.encodeSource({ n: NaN, u: undefined, d: new Date(0) });
+```
+
+---
+
+### `decodeSourceTrusted`
+
+**`decodeSourceTrusted(source)`**: raw-eval counterpart of `encodeSource` (same channel as `parseTrusted`, no reviver parameter). Only for source produced by `encodeSource` or equivalent trusted in-memory text.
+
+---
+
+### `decodeSourceChecked`
+
+**`decodeSourceChecked(source, reviver?)`**: **eval-free** lenient decoder for the source-literal subset (`toSource`-style data). Accepts identifier keys, parens, `undefined`, `NaN`, `Infinity` and JS escape sequences; **rejects functions, `new`, calls and member access** before anything can run. For caches and payloads that may be corrupted or misrouted: anything executable throws `SyntaxError` (`ESON.decodeSourceChecked: unsafe or malformed source`).
+
+```jsx
+var v = ESON.decodeSourceChecked('({a:1, b:[true, null, "x"], u:undefined, n:NaN})');
+try { ESON.decodeSourceChecked('({f:(function(){return 1;})})'); } catch (e) { /* throws */ }
+try { ESON.decodeSourceChecked('({a:1}).x'); } catch (e) { /* throws */ }
+```
+
+---
+
+### `capabilities`
+
+**`capabilities()`**: explicit re-probe of the runtime environment. Returns `EsonCapabilities`:
+
+| Field | Type | Meaning |
 |---|---|---|
-| `parse` | `parse(text, reviver?)` | **Strict RFC 8259 parse:** pre-scan + sanitize + `eval` w/ `SyntaxError` catch. The default lane. |
-| `stringify` | `stringify(value, replacer?, space?)` | JSON-compatible stringify, delegated to the patched json2 algorithm bundled as `ESON_JSON2`. |
-| `stringifyFast` | `stringifyFast(value, options?)` | Preflight + native source generation for certified-inert data (unsupported/cycle contract). |
-| `parseTrusted` | `parseTrusted(source, reviver?)` | **Raw eval (trusted channel only).** Explicitly named; nothing routes text here by heuristic. |
-| `encodeSource` | `encodeSource(value)` | SpiderMonkey source generation; preserves `undefined`, `NaN`, functions, dates, sparse arrays. |
-| `decodeSourceTrusted` | `decodeSourceTrusted(source)` | Raw-eval counterpart of `encodeSource` (alias of `parseTrusted`). |
-| `decodeSourceChecked` | `decodeSourceChecked(source, reviver?)` | **Eval-free** lenient decode of the source-literal subset, for caches/payloads that may be corrupted or misrouted. |
-| `capabilities` | `capabilities()` | Runtime fingerprints: JSON classification, source kernels (`uneval`/`toSource`/`quote`), engine caps. |
-| `install` | `install(options?)` | Provision the json2 fallback / expose the facade globally. |
-| `benchmark` | `benchmark(iterations?)` | In-module quick benchmark using `$.hiresTimer` when present. |
+| `json` | object | Global `JSON` classification: `{ exists, classification, sourceFingerprint, behavioral }` where `classification` is `absent` / `native-looking` / `known JSON2` / `unknown` / `broken` |
+| `uneval` | boolean | `uneval` kernel present |
+| `objectToSource` / `arrayToSource` / `stringToSource` / `stringQuote` | boolean | `toSource` / `quote` kernels present |
+| `sourceProfile` | string | e.g. `uneval+objectToSource+...` or `none`; gates `encodeSource` |
+| `engine` | object | `{ globalJsonPresent, localJsonPresent }` |
 
-When loaded via `vendor-eson.js`, the global `JSON.parse` / `JSON.stringify` *are* ESON's; the install footer replaces them unconditionally (ExtendScript's own native JSON, where present, is the permissive one).
+```jsx
+var caps = ESON.capabilities();
+if (caps.sourceProfile === "none") { /* encodeSource will throw */ }
+```
+
+---
+
+### `install`
+
+**`install(options?)`**: provisioning hook. Returns fresh `capabilities()` after applying options:
+
+| Option | Effect |
+|---|---|
+| `json2Source` | string; loads a JSON2 instance from raw source as the stringify fallback |
+| `exposeGlobal` | boolean; best-effort exposure of the fallback as the global `JSON` when absent |
+
+---
+
+### `benchmark`
+
+**`benchmark(iterations?)`**: in-module quick benchmark (`iterations` defaults to 100). Uses `performance.now` / `$.hiresTimer` when present. Returns `BenchItem[]` with lanes `stringify`, `parse`, and `trustedRoundtrip` (the last only when a source kernel exists). Each item: `{ lane, payload, iterations, medianUs, minUs, p95Us, opsPerSec, outputBytes, vsJson2 }`.
+
+---
+
+### ESM core exports (Node)
+
+`dist/eson-core.esm.mjs` re-exports the facade plus the underlying lane functions for harnesses and advanced use:
+
+| Export | What it is |
+|---|---|
+| `parse` / `stringify` / `stringifyFast` / `parseTrusted` / `encodeSource` / `decodeSourceTrusted` / `decodeSourceChecked` / `capabilities` / `install` / `benchmark` | the same facade functions |
+| `parseJson` / `stringifyJson` / `stringifyFastJson` | raw lane implementations |
+| `evalSource` / `decodeCheckedSource` / `encodeSourceImpl` / `decodeSourceImpl` / `parseTrustedImpl` | trusted-lane internals |
+| `classifyJson` / `captureKernel` / `globalObject` / `loadJson2` | capability probes and JSON2 instance loading |
+| `rewriteSource` / `sourceForRoot` | native-source rewriter machinery |
+
+---
+
+### Error reference
+
+| Condition | Error |
+|---|---|
+| `parse` / `decodeSourceChecked`: grammar violation, depth > 512, or executable residue | `SyntaxError` |
+| `stringifyFast`: circular structure | `TypeError` (`...converting circular structure to JSON`) |
+| `stringifyFast` with `onUnsupported: "throw"`: non-inert value | `Error` (`...unsupported value at <path>`) |
+| `encodeSource` without a source kernel | `Error` (`...no native source kernel available`) |
+| `stringify`: circular structure (underlying json2) | catchable `RangeError` / `InternalError` |
+| `stringify` / `parse`: no JSON2 fallback provisioned (unlikely; bundles ship `ESON_JSON2`) | `Error` (`ESON: no JSON2 fallback available...`) |
 
 ---
 
