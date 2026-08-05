@@ -26,7 +26,7 @@ if (!existsSync(JSON2_PATH)) {
 
 function findEsbuild() {
   if (process.env.ESBUILD_PATH && existsSync(process.env.ESBUILD_PATH)) return process.env.ESBUILD_PATH;
-  var direct = join(ROOT, 'node_modules', '.bin', 'esbuild');
+  var direct = join(ROOT, 'node_modules', 'esbuild', 'bin', 'esbuild');
   if (existsSync(direct)) return direct;
   var cacheDirs = [
     join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx'),

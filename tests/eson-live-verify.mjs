@@ -14,7 +14,7 @@ var BUNDLE = join(ROOT, '.eson-live-verify.bundle.mjs');
 
 function findEsbuild() {
   if (process.env.ESBUILD_PATH && existsSync(process.env.ESBUILD_PATH)) return process.env.ESBUILD_PATH;
-  var direct = join(PROJECT, 'node_modules', '.bin', 'esbuild');
+  var direct = join(PROJECT, 'node_modules', 'esbuild', 'bin', 'esbuild');
   if (existsSync(direct)) return direct;
   var cacheDirs = [
     join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx'),

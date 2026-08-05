@@ -16,7 +16,7 @@ var SEED = Number(process.argv[3] || '0xC0FFEE') >>> 0;
 
 function findEsbuild() {
   if (process.env.ESBUILD_PATH && existsSync(process.env.ESBUILD_PATH)) return process.env.ESBUILD_PATH;
-  var direct = join(PROJECT, 'node_modules', '.bin', 'esbuild');
+  var direct = join(PROJECT, 'node_modules', 'esbuild', 'bin', 'esbuild');
   if (existsSync(direct)) return direct;
   var cacheDirs = [
     join(process.env.LOCALAPPDATA || '', 'npm-cache', '_npx'),
