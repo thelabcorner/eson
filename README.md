@@ -1,6 +1,8 @@
 <div align="center">
 
-# ESON: Strict JSON for ExtendScript (ES3)
+# ESON: Strict JSON for Adobe ExtendScript (ES3)
+
+## ExtendScript Object Notation = E.S.O.N.
 
 ### The drop-in JSON library for Adobe Illustrator, InDesign, Photoshop & any ExtendScript host
 
