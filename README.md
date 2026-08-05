@@ -530,7 +530,7 @@ dangerous chars, reviver, facade, private json2 all pass live.
   unsupported/cycle contract).
 - The native stringify lane (fastRewrite) measured slower than json2 at every
   size — kept as an opt-in architectural piece and the rewriter test surface.
-- `node_modules` for the prototype resolves from `arcfit/node_modules`
-  (esbuild/typescript) — no local install needed.
+- `node_modules` must be installed locally (`npm install`) for build and
+  test tooling (esbuild, typescript).
 - Locked DLLs in `native/build/` (ESONJsonFinal/P/T/U/V) are deletable after
   an Illustrator restart.
