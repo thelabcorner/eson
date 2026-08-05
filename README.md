@@ -42,7 +42,7 @@
 
 ## Why ESON?
 
-**ExtendScript, the ES3 scripting engine inside Illustrator, InDesign, Photoshop, Premiere Pro, After Effects and InCopy, has no native `JSON` object.** There is no `JSON.parse`, no `JSON.stringify`. Every script that needs JSON has to ship a library, and for years the only real option was [json2](https://github.com/douglascrockford/JSON-js) (2009-era Crockford).
+**ExtendScript, the ES3 scripting engine inside Illustrator, InDesign, Photoshop, Premiere Pro, After Effects and InCopy, has no native `JSON` object.** There is no `JSON.parse`, no `JSON.stringify`. Every script that needs JSON has to ship a library, and for years the only real option was [json2](https://github.com/douglascrockford/JSON-js) (2019-era Crockford).
 
 json2 works, but it is *permissive*, and in the Adobe engine that matters:
 
