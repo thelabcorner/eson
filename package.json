@@ -1,0 +1,35 @@
+{
+  "name": "eson",
+  "version": "1.0.0",
+  "description": "ESON — ExtendScript Object Notation: a strict JSON parser/stringify library for ExtendScript (ES3) engines",
+  "type": "module",
+  "main": "dist/eson-core.esm.mjs",
+  "scripts": {
+    "build": "node eson-build.mjs",
+    "test": "node tests/eson-test.mjs",
+    "typecheck": "npx tsc --noEmit -p .",
+    "benchmark": "node tests/benchmark.mjs",
+    "live-verify": "node tests/eson-live-verify.mjs",
+    "native-build": "powershell -ExecutionPolicy Bypass -File native/build.ps1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thelabcorner/eson.git"
+  },
+  "keywords": [
+    "json",
+    "extendscript",
+    "es3",
+    "parser",
+    "stringify",
+    "strict"
+  ]
+}
