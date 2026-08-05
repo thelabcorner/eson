@@ -11,7 +11,7 @@
 [![Adobe: Creative Suite](https://img.shields.io/badge/Adobe%20-Creative%20Suite-red?logo=adobe&logoColor=white)](https://extendscript.docsforadobe.dev/)
 [![Engine](https://img.shields.io/badge/ExtendScript-ES3-green)](#compatibility)
 [![Size](https://img.shields.io/badge/runtime-15.4%20KB-orange)](#installation)
-[![License: MIT](https://img.shields.io/badge/license-GNU%20GPL%20v3-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GNU%20GPL%20v3-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 </div>
 
@@ -36,6 +36,7 @@
   - [Architecture & design rationale](#architecture)
   - [The ExternalObject ABI saga](#externalobject-abi)
   - [Known limitations](#known-limitations)
+- [Credits](#credits)
 - [License](#license)
 
 ---
@@ -626,9 +627,19 @@ The native case (`native/eson_json.c`) was an empirical expedition. Findings:
 
 ---
 
+## Credits
+
+ESON stands on the shoulders of the ExtendScript community. Particular thanks to:
+
+- **[docsforadobe](https://github.com/docsforadobe) and the docsforadobe.dev community:** maintainers of the de-facto reference documentation for the ExtendScript runtime, the Adobe DOMs and the scripting SDK. Their reverse-engineering of the ExtendScript object model, ES3 runtime behavior and engine quirks made the measured findings in this README possible to write down at all, and their docs remain the first stop for anyone scripting Illustrator, InDesign, Photoshop or the rest of the Creative Suite. The `@Illustrator` [API reference](https://extendscript.docsforadobe.dev/) is the standard we benchmark "documented behavior" against.
+- **Douglas Crockford:** author of [JSON-js](https://github.com/douglascrockford/JSON-js) (public domain), whose json2 stringify algorithm ships inside ESON as the private `ESON_JSON2` (with the ExtendScript ternary and pair-aware escaping fixes).
+- **The JSONTestSuite project** ([nst/JSONTestSuite](https://github.com/nst/JSONTestSuite)): the canonical RFC 8259 acceptance corpus used to certify the strict parser.
+
+---
+
 ## License
 
-MIT. See [LICENSE](LICENSE) (ESON core). The bundled json2 stringify algorithm is derived from Douglas Crockford's public-domain [JSON-js](https://github.com/douglascrockford/JSON-js), with the ExtendScript-specific fixes documented in this README.
+GPL-3.0. See [LICENSE](LICENSE) (ESON core). The bundled json2 stringify algorithm is derived from Douglas Crockford's public-domain [JSON-js](https://github.com/douglascrockford/JSON-js), with the ExtendScript-specific fixes documented in this README.
 
 ---
 
