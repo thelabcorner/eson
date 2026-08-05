@@ -2,3 +2,10 @@ node_modules/
 dist/
 native/build/
 *.obj
+
+# IDE
+.idea/
+
+# Credentials (never commit)
+.git-credentials
+*credentials*

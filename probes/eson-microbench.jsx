@@ -1,5 +1,5 @@
 // ESON primitive microbenchmark v2 - bounded live-run profile.
-// Measures the cost of every candidate primitive at ArcFit-relevant sizes.
+// Measures the cost of every candidate primitive at realistic payload sizes.
 // Iteration counts are capped so a single lane cannot exceed ~3 seconds.
 (function () {
   var R = {};

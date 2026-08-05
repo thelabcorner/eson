@@ -456,11 +456,11 @@ output verified against the un-memoized lane (incl. lone surrogates and
 \u2028/\u2029). The linear-LRU variant measured decisively worse (+135-218%)
 and was rejected.
 
-### txt reader vs ESON — ArcFit persistence A/B (live ES3, 2026-08-05)
+### txt reader vs ESON — persistence A/B (live ES3, 2026-08-05)
 
-Direct comparison of ArcFit's text persistence methodology (the key=value
-line scanners in `arcfit/src/core/settings.ts` / `profiles.ts` —
-`parseSettings`/`parseProfiles`/`serialize*`) against ESON parse/stringify on
+Direct comparison of the key=value text persistence methodology (the line
+scanners — `parseSettings`/`parseProfiles`/`serialize*` patterns) against
+ESON parse/stringify on
 equivalent payloads, run in the Illustrator engine (ExtendScript ES3, 30.6.0)
 via a bundled probe dispatched with the COM tool's `eval --file` (auto-routed
 through `$.evalFile`; results returned through the envelope). Median us,
@@ -479,11 +479,11 @@ on all three payloads.
 
 Conclusion: in the ES3 engine the txt methodology beats ESON on every lane —
 parse ~2-4x faster (no eval, no pre-scan), write ~13-17x faster (plain concat
-vs the escaping regex at ~0.3 us/B). ArcFit's persistence stays on the txt
-format; ESON JSON remains the COM/transport format, where its write lane is
-the weakest point. (For reference: this payload's cold ESON parse ran ~1.6
-us/B vs the ~0.4 us/B of the earlier 157 KB eson-benchmark profile — the
-pre-scan rate is content-dependent.)
+vs the escaping regex at ~0.3 us/B). txt-format persistence remains the
+faster choice; ESON JSON remains the COM/transport format, where its write
+lane is the weakest point. (For reference: this payload's cold ESON parse ran
+~1.6 us/B vs the ~0.4 us/B of the earlier 157 KB eson-benchmark profile —
+the pre-scan rate is content-dependent.)
 
 ### Deterministic differential fuzzing
 
@@ -506,8 +506,8 @@ pre-scan rate is content-dependent.)
 
 ### The production vendor — json2 sneakily bundled inside ESON
 
-`dist/vendor-eson.js` is the drop-in replacement for the two `vendor/json2.js`
-files (arcfit + the COM skill, identical). It is the ESON bundle with the
+`dist/vendor-eson.js` is the drop-in replacement for consumer `vendor/json2.js`
+files (identical copies). It is the ESON bundle with the
 patched json2 attached to a private object (`ESON_JSON2`) plus an install
 footer that makes the global `JSON.parse`/`JSON.stringify` BE ESON's (creating
 the object when absent, REPLACING an existing parse — ExtendScript's native
