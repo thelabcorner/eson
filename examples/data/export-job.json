@@ -1,0 +1,7 @@
+{
+  "job": "esonexample-demo",
+  "artboards": [0, 1],
+  "annotate": false,
+  "labelPrefix": "Artboard: ",
+  "note": "Set annotate to true to draw a label on each listed artboard. artboards must be valid indices in the active document."
+}
