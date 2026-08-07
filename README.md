@@ -11,7 +11,7 @@
 [![Adobe: Creative Suite](https://img.shields.io/badge/Adobe%20-Creative%20Suite-red?logo=adobe&logoColor=white)](https://extendscript.docsforadobe.dev/)
 [![Engine](https://img.shields.io/badge/ExtendScript-ES3-green)](#compatibility)
 [![Size](https://img.shields.io/badge/runtime-15.4%20KB-orange)](#installation)
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL-3.0-or-later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL%203.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 </div>
 
@@ -26,6 +26,7 @@
 - [Why ESON?](#why-eson)
 - [Features](#features)
 - [Which build should I use?](#which-build-should-i-use)
+- [Get the Release](#get-the-release)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
@@ -107,6 +108,27 @@ This is also the split high-frequency automation uses: install the runtime
 core once per session so later evals reuse it, because transport only needs
 strict parse/stringify.
 
+### Runnable examples
+
+The `examples/` folder ships six runnable, live-verified ExtendScript scripts
+(plus a sample job file in `examples/data/`): each one loads the needed build
+relative to its own location (override with the `ESON_DIST` env var), runs
+self-checking demonstrations, and returns a JSON report as its last-statement
+value — so they work both from File > Scripts and from COM/automation
+(`eval --file examples/01-parse-stringify.jsx`). Run `npm run build` first so
+`dist/` exists.
+
+| Example | Build | Demonstrates |
+|---|---|---|
+| `01-parse-stringify.jsx` | runtime | drop-in global JSON: parse, reviver, stringify, memo |
+| `02-strict-parse.jsx` | runtime | the json2 permissive holes, all rejected |
+| `03-config-job-batch.jsx` | runtime | config-driven batch: preflight → snapshot → commit → restore → report |
+| `04-trusted-transport.jsx` | full | `encodeSource` / `decodeSourceTrusted` (undefined, NaN, dates, functions) |
+| `05-eval-free-lane.jsx` | full | `decodeSourceChecked`: data accepted, executable rejected |
+| `06-fast-lane.jsx` | full | `stringifyFast`: fallback, throw-with-path, cycle errors |
+
+Each script writes its report to `%TEMP%\esonexample-0N-report.json` as well.
+
 ### Brief Adobe Illustrator examples
 
 **1. Per-eval automation (runtime build):** the pattern for high-frequency
@@ -155,6 +177,47 @@ var back = ESON.decodeSourceTrusted(state);
 
 var caps = ESON.capabilities(); // engine fingerprints (kernels, JSON class)
 ```
+
+---
+
+## Get the Release
+
+<div align="center">
+
+**All production bundles ship as GitHub release assets — this repo holds sources. Grab the runnable builds from the [Releases page](https://github.com/thelabcorner/eson/releases).**
+
+[![Latest stable](https://img.shields.io/github/v/release/thelabcorner/eson?style=for-the-badge&logo=github&label=Latest%20stable)](https://github.com/thelabcorner/eson/releases/latest)
+[![Release date](https://img.shields.io/github/release-date/thelabcorner/eson?style=for-the-badge&label=Released)](https://github.com/thelabcorner/eson/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/thelabcorner/eson/total?style=for-the-badge&label=Downloads)](https://github.com/thelabcorner/eson/releases)
+
+</div>
+
+**How it works, in three steps:**
+
+1. Open the [Releases page](https://github.com/thelabcorner/eson/releases).
+2. Pick the **latest stable** tag (top of the list — today that is `v1.0.0`).
+3. Download the asset that matches your use case:
+
+| You are... | Take this release | And this asset |
+|---|---|---|
+| A script/plugin that needs strict `JSON.parse` / `JSON.stringify` | **Latest stable** | `vendor-eson.js` — drop-in vendor, installs the global |
+| A facade-only script (leave the global alone) | Latest stable | `ESON.jsx` — bannerless IIFE, defines `ESON` |
+| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` — 15.4 KB, parse/stringify only |
+| Node.js testing / tooling | Latest stable | `eson-core.esm.mjs` — ESM core (25 exports) |
+| Differential probes / verification | Latest stable | `json2-reference.jsx` — raw json2 reference lane |
+| A fix that isn't released yet | Pre-release / `master` | Build from source: `npm run build` |
+
+> **Rule of thumb: start with the latest stable tag.** Every release asset is
+> produced by `npm run build` from the exact tagged commit, and no release is
+> tagged before it passes the full gate: 623 Node assertions, JSONTestSuite
+> 95/95 + 188/188 + 35/35, and 330,000+ differential fuzz iterations vs V8.
+
+> **Staying current:** releases follow [SemVer](https://semver.org/)
+> (`v1.0.0`): patch = bug fix, minor = new feature, major = breaking change.
+> Watch the repository → *Releases* to get notified, and read the release
+> notes before upgrading across a major bump.
+
+Then follow [Installation](#installation) for drop-in usage snippets.
 
 ---
 
@@ -547,6 +610,7 @@ eson/
   vendor/         json2.raw.js (build-only raw json2 input)
   tests/          Node harnesses (custom, no framework)
   probes/         live ExtendScript probes (capability, benchmark, transport)
+  examples/       runnable ExtendScript examples (see "Runnable examples")
   native/         eson_json.c + eson_abi.h + build.ps1 (ExternalObject DLL)
   dist/           generated bundles (gitignored; produced by npm run build)
 ```
