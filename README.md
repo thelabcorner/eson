@@ -10,7 +10,7 @@
 [![JSONTestSuite](https://img.shields.io/badge/JSONTestSuite-95%2F95%20188%2F188%2035%2F35-purple)](https://github.com/nst/JSONTestSuite)
 [![Adobe: Creative Suite](https://img.shields.io/badge/Adobe%20-Creative%20Suite-red?logo=adobe&logoColor=white)](https://extendscript.docsforadobe.dev/)
 [![Engine](https://img.shields.io/badge/ExtendScript-ES3-green)](#compatibility)
-[![Size](https://img.shields.io/badge/runtime-15.4%20KB-orange)](#installation)
+[![Size](https://img.shields.io/badge/runtime-15.7%20KB-orange)](#installation)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL%203.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 </div>
@@ -78,7 +78,7 @@ ESON is the strict answer: a **drop-in replacement for `JSON.parse` / `JSON.stri
 - **Fast in the ES3 engine:** ~1.6× faster cold parse than json2 at 43 KB, ~385× faster on repeat parses via an 8-entry verdict memo (47.7 ms cold → 124 µs).
 - **Preserves more than JSON when you need it:** the trusted lane (`encodeSource` / `decodeSourceTrusted`) round-trips `undefined`, `NaN`, `Infinity`, functions, dates and sparse arrays in ~26 µs.
 - **Certified, not claimed:** JSONTestSuite 95/95 + 188/188 + 35/35 with zero V8 divergence; 623 Node assertions; 36/36 byte-equal differential vs the JSON2 reference in the live engine.
-- **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 15.4 KB; the full `ESON.jsx` is 52.9 KB.
+- **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 15.7 KB; the full `ESON.jsx` is 59.3 KB (the +6.4 KB is the opt-in native gate module - pruned from the runtime build by tree-shaking).
 
 ---
 
@@ -90,12 +90,12 @@ stringify; the difference is everything else.
 | | **Runtime build** | **Full build** |
 |---|---|---|
 | Files | `vendor-eson-runtime.js`¹ | `vendor-eson.js`, `ESON.jsx` |
-| Size | 15.4 KB | 52.9 KB (ESON.jsx) / 53.1 KB (vendor-eson.js) |
-| API | `parse`, `stringify` only | full facade: `parse`, `stringify`, `parseTrusted`, `stringifyFast`, `encodeSource` / `decodeSourceTrusted`, `decodeSourceChecked`, `capabilities`, `install`, `loadJson2Api` (provisioning helper), `benchmark` |
+| Size | 15.7 KB | 59.3 KB (ESON.jsx) / 59.4 KB (vendor-eson.js) |
+| API | `parse`, `stringify` only | full facade: `parse`, `stringify`, `parseTrusted`, `stringifyFast`, `encodeSource` / `decodeSourceTrusted`, `decodeSourceChecked`, `enableNativeGate` / `disableNativeGate`, `capabilities`, `install`, `loadJson2Api` (provisioning helper), `benchmark` |
 | Installs global `JSON` | yes (vendor variant) | yes (vendor variant) |
-| Best for | high-frequency automation, per-eval injection, anything that only needs strict `JSON.parse` / `JSON.stringify` | plugins and long-lived scripts that also need the trusted codec, certified fast lane, capability probing, or benchmark tooling |
+| Best for | high-frequency automation, per-eval injection, anything that only needs strict `JSON.parse` / `JSON.stringify` | plugins and long-lived scripts that also need the trusted codec, certified fast lane, the ExternalObject-accelerated gate, capability probing, or benchmark tooling |
 
-¹ `ESON-runtime.jsx` is a build intermediate (bare esbuild bundle: no `ESON_JSON2` wrapper, no ES3 shim, no install footer), not a standalone-loadable artifact; the loadable runtime artifact is `vendor-eson-runtime.js` only.
+¹ `ESON-runtime.jsx` is a build intermediate (bare esbuild bundle: no `ESON_JSON2` wrapper, no ES3 shim, no install footer), not a standalone-loadable artifact; the loadable runtime artifact is `vendor-eson-runtime.js` only. The runtime build contains zero ExternalObject code (the `parseJson` gate hook is inert there - the parameter is never passed).
 
 **Rule of thumb:** if your script only ever calls `JSON.parse` and
 `JSON.stringify` (or `ESON.parse` / `ESON.stringify`), use the **runtime
@@ -108,13 +108,81 @@ This is also the split high-frequency automation uses: install the runtime
 core once per session so later evals reuse it, because transport only needs
 strict parse/stringify.
 
+---
+
+## Two paths: JSX-only (default) vs ExternalObject-accelerated
+
+ESON deliberately ships **two execution paths** for `parse()`:
+
+### Path 1 - JSX-only (the default, every build, every host)
+
+The certified lane: a JSONTestSuite-certified regex pre-scan
+(95/95 must-accept, 188/188 must-reject, differential-fuzzed) + sanitize +
+eval with a SyntaxError catch, plus the 8-entry verdict memo. Zero
+dependencies, works in every ExtendScript host (Illustrator, InDesign,
+Photoshop, After Effects, Premiere Pro, InCopy, Bridge), no DLL, no
+architecture constraints. **This is what every `parse()` call does unless
+you explicitly opt in to Path 2.**
+
+### Path 2 - ExternalObject-accelerated (opt-in, full build only, Windows x64)
+
+`ESON.enableNativeGate({ dir })` loads the ESONJson.dll
+(`native/build/ESONJson.dll`, canonical Adobe ABI - see the ABI saga below),
+self-certifies verdict parity on a bundled corpus at enable, and only then
+routes `parse()`'s cold path through the DLL's `validateText`. sanitize +
+eval stay; the DLL replaces only the pre-scan. Measured live on
+Illustrator 30.6.0:
+
+| Lane | 345 B | 1.7 KB | 43 KB |
+|---|---|---|---|
+| `parse` cold, JSX-only | 270 us | 1,319 us | 46,374 us |
+| `parse` cold, native gate | 19 us | 94 us | 2,784 us |
+| speedup | 14x | 14x | **17x** |
+
+The gate is certified before it is trusted:
+
+- **Enable-time self-certification** (`certified` in `capabilities().native`):
+  the native verdict must match the JSX gate verdict on every adjudicated
+  corpus case (valid accepts, invalid rejects), or the gate refuses to
+  enable with a reason. A gate that adjudicates nothing also fails.
+- **Channel-safety guard**: raw U+0000 and surrogate code units cannot cross
+  the ExternalObject string boundary faithfully (NUL truncates - verified
+  live that `{"a":1}\u0000,(probe=42)` would otherwise EXECUTE the post-NUL
+  expression; astral pairs are dropped). Such texts are **deferred** to the
+  certified pre-scan - the gate never adjudicates what the channel cannot
+  carry.
+- **Full JSONTestSuite certification** (per-DLL-build, live): the
+  accelerated path and the JSX path return identical verdicts on all 309
+  readable corpus files (y_ 95/95, n_ 184/184, i_ identical) - see
+  `probes/eson-corpus-parity.jsx` and its `%TEMP%\eson-corpus-parity.json`
+  report.
+- **eval stays the grammar checker**: still wrapped in the SyntaxError
+  catch, still only ever sees sanitized text. The native gate is a
+  reject/accept accelerator, never an eval channel.
+
+```jsx
+var caps = ESON.enableNativeGate({ dir: '/path/to/eson/native/build' });
+if (caps.native.enabled) {
+  ESON.parse(bigJson); // accelerated cold parse (validated gate + eval)
+}
+// ESON.disableNativeGate() returns to Path 1 at any time
+```
+
+Residual risks (documented, not eliminated): the enable-time corpus is a
+fast spot-check - the full-corpus certification is a per-DLL-build live run
+(re-run it after every DLL rebuild, since ExternalObject binding is
+per-DLL-build); and ExternalObject host errors that bypass JavaScript
+try/catch are possible (none observed with the canonical-ABI build: 14/14
+methods bound in the live session). Payloads containing raw NUL or astral
+characters fall back to Path 1's pre-scan automatically.
+
 ### Runnable examples
 
-The `examples/` folder ships six runnable, live-verified ExtendScript scripts
+The `examples/` folder ships seven runnable, live-verified ExtendScript scripts
 (plus a sample job file in `examples/data/`): each one loads the needed build
 relative to its own location (override with the `ESON_DIST` env var), runs
 self-checking demonstrations, and returns a JSON report as its last-statement
-value — so they work both from File > Scripts and from COM/automation
+value - so they work both from File > Scripts and from COM/automation
 (`eval --file examples/01-parse-stringify.jsx`). Run `npm run build` first so
 `dist/` exists.
 
@@ -126,6 +194,7 @@ value — so they work both from File > Scripts and from COM/automation
 | `04-trusted-transport.jsx` | full | `encodeSource` / `decodeSourceTrusted` (undefined, NaN, dates, functions) |
 | `05-eval-free-lane.jsx` | full | `decodeSourceChecked`: data accepted, executable rejected |
 | `06-fast-lane.jsx` | full | `stringifyFast`: fallback, throw-with-path, cycle errors |
+| `07-native-gate.jsx` | full | **the two paths**: gate OFF vs gate ON, certification report, timing (native ~9-17x cold) |
 
 Each script writes its report to `%TEMP%\esonexample-0N-report.json` as well.
 
@@ -202,7 +271,7 @@ var caps = ESON.capabilities(); // engine fingerprints (kernels, JSON class)
 |---|---|---|
 | A script/plugin that needs strict `JSON.parse` / `JSON.stringify` | **Latest stable** | `vendor-eson.js` — drop-in vendor, installs the global |
 | A facade-only script (leave the global alone) | Latest stable | `ESON.jsx` — bannerless IIFE, defines `ESON` |
-| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` — 15.4 KB, parse/stringify only |
+| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` - 15.7 KB, parse/stringify only |
 | Node.js testing / tooling | Latest stable | `eson-core.esm.mjs` — ESM core (25 exports) |
 | Differential probes / verification | Latest stable | `json2-reference.jsx` — raw json2 reference lane |
 | A fix that isn't released yet | Pre-release / `master` | Build from source: `npm run build` |
@@ -314,9 +383,50 @@ var back = ESON.decodeSourceTrusted(enc);
 | [`encodeSource`](#encodesource) | full | `encodeSource(value)` | source `string` |
 | [`decodeSourceTrusted`](#decodesourcetrusted) | full | `decodeSourceTrusted(source)` | decoded value |
 | [`decodeSourceChecked`](#decodesourcechecked) | full | `decodeSourceChecked(source, reviver?)` | decoded value |
+| [`enableNativeGate`](#enablenativegate) | full | `enableNativeGate(options?)` | `EsonCapabilities` (with `native`) |
+| [`disableNativeGate`](#enablenativegate) | full | `disableNativeGate()` | `EsonCapabilities` (with `native`) |
 | [`capabilities`](#capabilities) | full | `capabilities()` | `EsonCapabilities` |
 | [`install`](#install) | full | `install(options?)` | `EsonCapabilities` |
 | [`benchmark`](#benchmark) | full | `benchmark(iterations?)` | `BenchItem[]` |
+
+---
+
+### `enableNativeGate` / `disableNativeGate`
+
+**Path 2 - the ExternalObject-accelerated parse gate (opt-in, full build
+only, Windows x64 + the ESONJson.dll).** See the [Two paths](#two-paths-jsx-only-default-vs-externalobject-accelerated)
+section for the security model.
+
+`enableNativeGate(options?)` loads the DLL, smokes it, self-certifies
+verdict parity on a bundled corpus, and - only on full success - routes
+`parse()`'s cold path through the native validator. Returns fresh
+`capabilities()`; the result carries the `native` block:
+
+| Field | Meaning |
+|---|---|
+| `present` | the engine has `ExternalObject` |
+| `enabled` | gate certified and active |
+| `reason` | disabled reason (`''` when enabled) |
+| `dll` / `dllVersion` | loaded DLL name and `ESGetVersion` value |
+| `certified` | parity cases adjudicated at enable |
+
+```jsx
+var caps = ESON.enableNativeGate({ dir: '/path/to/native/build' });
+if (!caps.native.enabled) throw new Error('native gate off: ' + caps.native.reason);
+ESON.parse(payload); // accelerated cold parse
+ESON.disableNativeGate(); // back to Path 1
+```
+
+Options: `dir` (DLL directory, prepended to `ExternalObject.searchFolders`),
+`libName` (default `'ESONJson'`), and `validCases`/`invalidCases` corpus
+overrides (probes, tests). When the gate is active, `parse()` with no
+reviver routes through `validateText` + sanitize + eval; revivers, memo
+hits, and every other lane are unchanged. Payloads containing raw NUL or
+surrogate code units are deferred to the certified pre-scan automatically
+(the boundary cannot transport them faithfully).
+
+`disableNativeGate()` unloads the DLL and returns to the JSX-only path.
+`capabilities().native` always reports the current state.
 
 ---
 
@@ -325,7 +435,7 @@ var back = ESON.decodeSourceTrusted(enc);
 **`parse(text, reviver?)`**: strict RFC 8259 parser. The default, safe lane.
 
 - `text` is coerced with `String(text)`, so numbers, booleans and objects are accepted (but will almost always be rejected by the grammar).
-- Internally: `strictnessPreScan` (certified verdict-clean, see [Spec Conformance](#spec-conformance)) + sanitize (`[\u2028\u2029]` only) + `eval` as the native grammar checker, with a `SyntaxError` catch. Malformed input **throws**; it never returns a partially-parsed value.
+- Internally: `strictnessPreScan` (certified verdict-clean, see [Spec Conformance](#spec-conformance)) + sanitize (`[\u2028\u2029]` only) + `eval` as the native grammar checker, with a `SyntaxError` catch. Malformed input **throws**; it never returns a partially-parsed value. When the ExternalObject gate is enabled ([`enableNativeGate`](#enablenativegate)), the pre-scan is replaced by the certified native validator for no-reviver calls; the eval and its catch stay.
 - `reviver(text)`: a JSON.parse-compatible `(key, value)` reviver, applied depth-first on the parsed tree.
 - **Verdict memo:** identical text parsed without a reviver is memoized in an 8-entry LRU (47.7 ms cold → 124 µs at 43 KB). Caveat: memo hits return the **same object reference**; mutate the result and the next hit sees the mutation. Reviver parses bypass the memo. Parse errors are memoized too, and re-thrown on memo hits.
 
@@ -460,7 +570,7 @@ if (caps.sourceProfile === "none") { /* encodeSource will throw */ }
 
 | Export | What it is |
 |---|---|
-| `parse` / `stringify` / `stringifyFast` / `parseTrusted` / `encodeSource` / `decodeSourceTrusted` / `decodeSourceChecked` / `capabilities` / `install` / `benchmark` | the same facade functions |
+| `parse` / `stringify` / `stringifyFast` / `parseTrusted` / `encodeSource` / `decodeSourceTrusted` / `decodeSourceChecked` / `enableNativeGate` / `disableNativeGate` / `capabilities` / `install` / `benchmark` | the same facade functions |
 | `parseJson` / `stringifyJson` / `stringifyFastJson` | raw lane implementations |
 | `evalSource` / `decodeCheckedSource` / `encodeSourceImpl` / `decodeSourceImpl` / `parseTrustedImpl` | trusted-lane internals |
 | `classifyJson` / `captureKernel` / `globalObject` / `loadJson2` | capability probes and JSON2 instance loading |
@@ -490,7 +600,9 @@ The trust contract is simple and strict: **no prefix, extension, checksum, or pa
 - `decodeSourceChecked()`: **no eval at all.** Accepts what `toSource` emits for data (identifier keys, parens, `undefined`, `NaN`, `Infinity`, JS escapes) and rejects functions, `new`, calls and member access before anything can run.
 - `parseTrusted` / `decodeSourceTrusted`: the *only* raw-eval entry points, visibly named, for trusted in-memory round-trips.
 
-Strictness holes closed by the pre-scan: leading zeros (`01`, `-00`, `[1,01]`), trailing dots (`1.`, `1.e5`), raw control characters in strings, trailing commas, number-token adjacency (`1-2`), member-access dots (`[3[4]]`, `{}.false`), JS-only escapes (`"\q"`, `"\x41"`, octal, `"\v"`), and nesting depth > 512.
+Strictness holes closed by the pre-scan: leading zeros (`01`, `-00`, `[1,01]`), trailing dots (`1.`, `1.e5`), raw control characters in strings, trailing commas, number-token adjacency (`1-2`), member-access dots (`[3[4]]`, `{}.false`), JS-only escapes (`"\q"`, `"\x41"`, octal, `"\v"`), trailing second values (`{"a":1} 1` - the skeleton masks numbers as `]`; the structural walk now rejects them, so the eval never sees them), and nesting depth > 512.
+
+The ExternalObject gate ([`enableNativeGate`](#enablenativegate)) is covered by the same contract: it only ever replaces the pre-scan for no-reviver calls, and only after its own verdict-parity certification (see [Two paths](#two-paths-jsx-only-default-vs-externalobject-accelerated)).
 
 ---
 
@@ -509,7 +621,7 @@ V8 divergence is counted and reported, not a hard failure gate. One encoding-lev
 
 Plus deterministic differential fuzzing against V8's native `JSON.parse` (`node tests/fuzz.mjs [iters] [seed]`): **330,000+ iterations across four seeds, zero divergences**, heap steady (~120 MB).
 
-The suite has already paid for itself: it exposed four real strictness holes (depth counting inside string literals, an escape-legalizing sanitizer, skeleton-invisible bare keys / comma rules, and a leading-zero check that tripped on exponent digits), all fixed in `src/validate.ts`.
+The suite has already paid for itself: it exposed four real strictness holes (depth counting inside string literals, an escape-legalizing sanitizer, skeleton-invisible bare keys / comma rules, and a leading-zero check that tripped on exponent digits), all fixed in `src/validate.ts`. The live full-corpus runs through the ExternalObject gate exposed two more classes that V8-based testing cannot see: an ExtendScript regex-engine hang on strings ending in a lone backslash (the `rx_protect` alternation-star, fixed with a two-pass shape) and trailing-second-value acceptance (`{"a":1} 1`, fixed in the structural walk).
 
 ---
 
@@ -540,6 +652,25 @@ Parse wins at size (the eval-based lane scales ~1.6× better at 43 KB); stringif
 | raw `toSource` (engine baseline) | 5 µs | 40 µs | 731 µs |
 | raw `eval` (engine baseline) | 15 µs | 91 µs | 2.8 ms |
 
+### Path 2: the ExternalObject gate (same host, canonical-ABI DLL)
+
+The benchmark (`probes/eson-benchmark.jsx`, `native.*` lanes) and example 07
+measure the opt-in accelerated path against the JSX-only path:
+
+| Lane | 345 B | 1.7 KB | 43 KB |
+|---|---|---|---|
+| `native.validate` (gate only) | 2 µs | 8 µs | 146 µs |
+| `nativeGate+eval` (full parse) | 19 µs | 94 µs | 2,784 µs |
+| `eson.parse.cold` (JSX-only) | 270 µs | 1,319 µs | 46,374 µs |
+| speedup (cold parse) | **14×** | **14×** | **17×** |
+| `native.packed.read` vs charCodeAt read | 1,241 vs 2,321 µs (1.87×) | | |
+| `native.packed.write` vs fromCharCode write | 3,903 vs 7,228 µs (1.85×) | | |
+| `native.escapeDirect` vs byte-drain | 81 vs 12,392 µs (153×) | | |
+
+Memo hits (3-124 µs) still beat the native gate - the acceleration is for
+cold parses of payloads ≥ ~1 KB. The verdict-memo and reviver semantics are
+identical on both paths.
+
 Same-run correctness checks: stringify byte-equal to the JSON2 reference on all payloads; 0 invalid inputs accepted by ESON.
 
 **How the parse gets fast:** the strictness pre-scan pushes work into native regex passes (with a short per-char walk over the collapsed structural string for depth and balance), the sanitizer is narrowed to `[\u2028\u2029]` only, comma rules are folded into one regex over the collapsed structural string, and the eval itself is the native grammar checker at ~0.06 µs/byte. An 8-entry value-keyed verdict LRU then skips pre-scan + eval entirely on repeat parses; the memo hit lane is ~385× faster than cold.
@@ -555,8 +686,13 @@ Same-run correctness checks: stringify byte-equal to the JSON2 reference on all 
 | ExtendScript (ES3): Illustrator, InDesign, Photoshop, After Effects, Premiere Pro, InCopy, Bridge | Bundles are ES3-safe (ES5 TypeScript target, esbuild `platform=neutral`) |
 | Illustrator 30.6.0 / ExtendScript 4.5.6 | Verified live (probes + live-verify harness) |
 | Node.js ≥ 18 | ESM core + test harnesses |
-| Windows x86-64 | Native ExternalObject DLL experiment (`native/`) |
+| Windows x86-64 | Native ExternalObject DLL (`native/`) - Path 2 gate, opt-in |
 | Modern JS engines | The core also runs under V8 (used as the fuzz oracle) |
+
+The two paths: the JSX-only path is portable across every ExtendScript host;
+the ExternalObject-accelerated path (Path 2) requires Windows x86-64, the
+built ESONJson.dll, and the documented per-DLL-build certification
+(`probes/eson-corpus-parity.jsx`).
 
 What the ES3 engine lacks, and how ESON handles it: no `JSON`, no `Object.defineProperty`, no `Function.prototype.bind`, no `Array.prototype.indexOf`, no `String.prototype.quote`; the bundle ships an ES3 shim and probes the engine's real source kernels (`uneval` / `toSource` / `quote`) lazily on first facade call (`capabilities()` re-probes).
 
@@ -600,6 +736,8 @@ node tests/json-suite.mjs        # official JSONTestSuite (95 y_ / 188 n_ / 35 i
 node tests/fuzz.mjs 100000 0x..  # deterministic differential fuzz vs V8
 npm run live-verify    # verifies a live probe report (Illustrator running)
 npm run native-build   # native/build/ESONJson.dll (Windows; restart Illustrator first)
+# live certification of the native gate (per DLL build, in Illustrator):
+#   python ILLUSTRATOR_COM_TOOL.py eval --file probes/eson-corpus-parity.jsx
 ```
 
 Repository layout:
@@ -673,27 +811,91 @@ ESON facade
 <details>
 <summary><h2 id="externalobject-abi">The ExternalObject ABI saga (native case)</h2></summary>
 
-The native case (`native/eson_json.c`) was an empirical expedition. Findings:
+The native case (`native/eson_json.c`) went through two empirical rounds,
+both live on Illustrator 30.6.0. Round 1 used the POC's *reconstructed* ABI
+and mostly failed; round 2 rebuilt it on the **verified** ArcFitEso
+prototype (`agent-skills/externalobject-extendscript/prototypes/arcfit-eso/`).
 
-- **Direct-access ABI**: `(TaggedData *argv, intptr_t argc, TaggedData *result)`; exports work best declared as `(void *p1, void *p2, void *p3)`; numeric results as double with tag 3; bare export names (signature codes live only in the ESInitialize string); ESFreeMem conservative no-op + static buffers (a real `free()` on a static buffer would crash).
-- **String arguments are per-DLL unreliable.** One POC DLL received strings fine; this DLL's string methods never did. Same signature codes, same read pattern. Never assume string args work; test each DLL.
-- **Per-method binding flakiness.** Some methods bind and run while others throw `"is not a function"` or `"Error #"` even though they are in the signature and exported. The pattern is per-DLL and per-method, not determined by name, code, order, or export shape.
-- **Some host errors bypass JavaScript `try/catch` entirely.** `"Error #"` and `"Language feature '' is not supported"` killed the eval from inside guarded try blocks. Never assume an ExternalObject call is containable.
-- **Numeric arguments are reliable** (~1 µs boundary, measured); this is the basis of the packed transport.
-- **Packed UTF-16 transport works end-to-end** (the workaround for broken string args): pack 3 UTF-16 code units per IEEE-754 double (48 exact bits), send `stagePacked(len, p0, ...)`, validate with the native UTF-16 validator (`validatePacked`), and either drain numbers or return text.
-- **kTypeString returns work for some methods** (validated text came back intact). **kTypeScript auto-eval did NOT fire**; the enum value (8) in the POC reconstruction is unverified. The real value needs Adobe's `ESExternalObject.h`/`ScriptLib.h`.
-- **A loaded DLL is locked** until the session ends; rebuilds fail until the DLL is unloaded or the session ends. Use lettered DLL file names per iteration (ESONJsonP, T, U, ...) and unload/terminate instances.
-- **JSON as the ExternalObject transport** (via this library): ESON.stringify → pack → native validate → kTypeString return → ESON.parse. Demonstrated live: valid round trip restores the object; `01` and executable payloads are rejected natively. **609 µs warm** (pre-packed), ~1 ms cold, the best functional ExternalObject transport; the in-engine trusted codec (~26 µs) remains the speed king when native validation is not needed.
+**Round 1 (retired): the reconstructed ABI.** `(void*,void*,void*)` exports,
+tags `kTypeString=1 / kTypeInteger=4 / kTypeScript=8`, `_a` signatures, no-op
+`ESFreeMem` with static buffers. Findings at the time:
+
+- **String arguments were per-DLL unreliable** — this DLL's string methods
+  (`stage`/`validateStaged`/`escapedBytes`/`validateText`) never received a
+  string; in the 2026-08-05 re-probe the same set failed in a second
+  session. Only `ping`/`version`/`escapeStaged`/`nextByte` bound.
+- **Packed UTF-16 transport works end-to-end** (the workaround for broken
+  string args): 3 UTF-16 code units per IEEE-754 double (48 exact bits),
+  `stagePacked(len, p0, ...)` → `validatePacked` → `evalJson`.
+- **A loaded DLL is locked** until the session ends; rebuilds fail until the
+  DLL is unloaded or the session ends. Use lettered DLL file names per
+  iteration (ESONJsonP, T, U, ...) and unload/terminate instances.
+
+**Round 2 (current): the canonical ABI, verified 2026-08-07.** Rebuilt on
+the ArcFitEso prototype — every one of its methods bound and ran on the same
+host, and the ESON rebuild (`version` now reports 2) follows it exactly:
+
+- **Tags are the canonical SoSharedLibDefs.h values, not the reconstruction:**
+  `kTypeString=4` (verified end-to-end, ~360 KB per direction),
+  `kTypeInteger=123`, `kTypeUInteger=124`, **`kTypeScript=125`** (auto-eval
+  verified live: the host evaluates the returned script and returns the
+  value — the old claim "did NOT fire / tag 8 unverified" is resolved; 8
+  was simply the wrong value).
+- **Documented `long fn(TaggedData* argv, long argc, TaggedData* retval)`
+  prototypes** (not `(void*,void*,void*)`), `_s` signatures on string
+  methods, **malloc'd returns + real `ESFreeMem(free)`** (mirrors
+  AdobeXMPScript's decompiled contract), non-negative error codes only.
+- **Measured channel tiers** (ArcFitEso dataset, same host/version): whole-
+  workload-native transforms (validate/escape/base64/hex) are 4,800-11,900×
+  and remove the engine wedge; the packed 2-bytes-per-char channel
+  (`packBytes`/`unpackBytes`) is 1.75× reads / 3.7× writes; **kTypeScript
+  bulk-array chunking loses at every chunk size (dead end)**. Boundary cost
+  is ~7 µs/KB, near-linear — MB-scale strings are safe.
+- **Channel rules:** NUL truncates the string channel (payloads with U+0000
+  are cut); packed values 0xD800-0xDFFF cannot round-trip (surrogate
+  window — ASCII/Latin-1 safe, arbitrary bytes travel as hex); signature
+  codes cast argument types (`_d` → `kTypeInteger`, accept the whole numeric
+  family).
+- **JSON as the ExternalObject transport** (via this library):
+  ESON.stringify → native `validateText` (one crossing, C validator) →
+  ESON.parse, or the packed fallback. The native validator rejects `01` and
+  executable payloads before they can run. The packed evalJson auto-eval
+  channel (kTypeScript 125) round-trips array/scalar/string payloads only:
+  the host evaluates the validated text as a statement, so JSON object
+  literals (`{"a":1}`) are a block-label parse error and the C validator
+  rejects parenthesized text - object payloads use the string channel. The
+  in-engine trusted codec (~26 µs) remains the speed king when native
+  validation is not needed.
+- **Security posture: the native gate is NOT the default.** `parse()` uses
+  the JSX-only path unless `ESON.enableNativeGate()` explicitly certifies
+  the DLL: enable-time verdict-parity self-certification on a bundled
+  corpus, a channel-safety guard (raw NUL and surrogate code units are
+  deferred to the pre-scan - a live exploit check proved NUL payloads could
+  otherwise smuggle an executable post-NUL expression past the native
+  verdict), and a per-DLL-build full-JSONTestSuite certification run
+  (`probes/eson-corpus-parity.jsx`; live result 2026-08-07: y_ 95/95,
+  n_ 184/184, i_ identical, zero mismatches). eval stays the grammar
+  checker on both paths.
+- **Live-corpus findings (2026-08-07) that V8-based testing cannot see:**
+  the full n_ run exposed an ExtendScript regex-engine hang on strings
+  ending in a lone backslash (`rx_protect`'s alternation-star, fixed with a
+  two-pass shape - the exact corpus file `n_string_1_surrogate_then_escape`
+  wedged the engine at 100% CPU before the fix), and the pre-scan accepted
+  trailing second values (`{"a":1} 1`) which the eval then rejected with
+  the engine's raw "Expected: )" instead of ESON's clean verdict (fixed in
+  the structural walk). Both have Node regression coverage.
 
 </details>
 
 <details>
 <summary><h2 id="known-limitations">Known limitations / open items</h2></summary>
 
-- kTypeScript tag value unverified (needs the real SDK header).
 - `stagePacked` host error after C completion (catchable, harmless).
 - `stringifyFast`'s preflight costs ~70 µs (the price of the unsupported/cycle contract).
 - The native stringify lane (fastRewrite) measured slower than json2 at every size; kept as an opt-in architectural piece and the rewriter test surface.
+- The native gate is certified live per DLL build (corpus parity 2026-08-07: y_ 95/95, n_ 184/184, i_ identical, zero mismatches; exploit checks for NUL-truncation and astral-surrogate payloads pass). Re-run `probes/eson-corpus-parity.jsx` after any DLL rebuild - ExternalObject binding is per-DLL-build.
+- Path 2 defers (falls back to the pre-scan) on payloads containing raw NUL or surrogate code units - the boundary cannot transport them; the astral case means valid JSON with astral chars (emoji, CJK ext-B) parses at JSX-only speed, not gate speed.
+- ExternalObject host errors that bypass JavaScript try/catch are a documented ExternalObject risk class; none were observed with the canonical-ABI build (14/14 methods bound and 1000+ calls in the live sessions).
 - Locked DLLs in `native/build/` are deletable after an Illustrator restart.
 
 </details>
@@ -737,3 +939,42 @@ Illustrator's arc warp measures its envelope from **everything**, including geom
 [**arcfit.dev**](https://arcfit.dev)
 
 </div>
+
+---
+
+## ESPACK: self-extracting single-file bundle (`ESON.accel.jsx`)
+
+ESON is the second espack consumer (after esb64): `dist/ESON.accel.jsx` is a
+single-file bundle that carries **ESONJson.dll as the espack payload** plus
+the shared esb64 accelerator (the espack "1 + n" model). On eval it:
+
+1. extracts the shared accelerator once per system (`%LOCALAPPDATA%\espack\`),
+2. natively unpacks `ESONJson.dll` to `%LOCALAPPDATA%\eson\`,
+3. loads it via `ExternalObject` and **auto-enables the native gate** with the
+   espack-provided lib — verdict-parity certification (76 cases) runs at
+   enable, exactly like the manual `enableNativeGate({ dir })` path.
+
+Build: `npm run build:accel` (requires `npm run native-build` + the sibling
+`espack` repo). Live-verified on Illustrator 30.6.0 (`npm run accel-live`):
+gate enabled + certified, gate-ON vs gate-OFF verdict parity on 28 valid/
+invalid cases, and the facade stays stable on `$.global` (the bundle installs
+the ESON vendor semantics `JSON = ESON`, which satisfies the COM tool's ESON
+share-check). `ESON.useEspack()` is the idempotent opt-in form; the outcome
+is on `ESON.espack`.
+
+Measured (30.6.0, live): parse with the native gate ON ≈ 191 µs vs OFF
+≈ 179 µs at 48,976 chars — the current pre-scan is ~3.7 µs/KB, so the gate
+is parity-speed today (the historical 14-17× native win was against the old
+pre-scan); its value is the certified RFC-exact native verdict + single-file
+delivery. The esb64 btoa/atob acceleration (58-70×) is the big espack win.
+
+### ESON core fix shipped with this integration
+
+The engine truncates object property names at U+0000 (measured live on
+30.6.0: `o['a\u0000b'] = 1` stores the key `'a'`). ESON's parse verdict memo
+therefore collided on raw-NUL texts: parsing the invalid corpus case
+`{"a":1}\u0000,1` wrote its error entry under the truncated key `{"a":1}`,
+poisoning every later parse of the valid text. Fixed in `src/parse.ts`
+(`memoEligible`): NUL-bearing texts are never memoized (read or write) — the
+memo can never answer for a different text. Covered by the existing 624
+assertion suite; regression-verified live.

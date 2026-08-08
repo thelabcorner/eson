@@ -1,25 +1,34 @@
 /*
- * ESONJson.dll - minimal ExtendScript ExternalObject case for the ESON
- * prototype (eson/).
+ * ESONJson.dll - ExtendScript ExternalObject case for the ESON prototype
+ * (eson/), rebuilt on the VERIFIED ExternalObject prototype (canonical
+ * SoSharedLibDefs ABI, measured live on Illustrator 30.6.0).
  *
- * Experiment summary (Illustrator 30.6.0, ExtendScript 4.5.6, live session):
- *   - Loading and numeric dispatch work (ping/version).
- *   - String ingress WORKS for the chunkdb POC DLL (stage('{"a":1}') -> 7)
- *     but NOT for this DLL: the string TaggedData is rejected by
- *     raw_string_arg on this host, and several no-arg methods fail to bind
- *     ("is not a function" / "Error #" / "Language feature '' is not
- *     supported"). The chunkdb POC documents the same class of failures
- *     ("several dynamic string paths failed", ABI/UB sensitivity).
- *   - The C validation/escaping logic itself is correct (validated via iso1:
- *     validate_json("{}") -> 0).
- * Conclusion: the ExternalObject boundary is not a reliable transport for
- * the gate/escape lanes on this host; the numbers that matter come from the
- * JSX lanes. This DLL is retained as the ABI experiment artifact.
+ * ABI dataset (Illustrator 30.6.0, live sessions 2026-08-04..07):
+ *   - The first ESONJson DLL used the POC's reconstructed tags
+ *     (kTypeString=1, kTypeInteger=4, kTypeScript=8), a (void*,void*,void*)
+ *     export shape, `_a` signatures and a no-op ESFreeMem. Its string
+ *     methods (stage/validateStaged/escapedBytes/validateText) failed to
+ *     bind in BOTH live sessions; only ping/version/escapeStaged/nextByte
+ *     bound.
+ *   - The verified prototype rebuilt with the canonical ABI bound every
+ *     method: documented `long fn(TaggedData*, long, TaggedData*)`
+ *     prototypes, `_s` signatures, malloc'd strings + real
+ *     ESFreeMem(free), kTypeString=4 (verified to ~360 KB per direction),
+ *     kTypeInteger=123, kTypeScript=125 (auto-eval verified live).
+ *     Failure tracked the DLL build, not the session.
+ *   - Measured channel winners (same host): packBytes/unpackBytes
+ *     (2-bytes-per-char packed channel) = 1.75x per-unit reads, 3.7x
+ *     per-unit writes; whole-workload-native transforms = 4,800-11,900x.
+ *     kTypeScript chunking loses at every chunk size - not used here.
  *
- * ABI: direct-access (TaggedData *argv, intptr_t argc, TaggedData *result),
- * x64, exports declared with the chunkdb's proven (void*, void*, void*) shape.
- * Numeric results: double with kTypeDouble. String returns: static buffer.
- * No logging side effects.
+ * This DLL therefore keeps the (correct, iso1-validated) C validator and
+ * escaper, fixes the ABI to the canonical tags/prototypes/ownership, and
+ * adds the verified packed channel + whole-workload-native transforms.
+ * `stagePacked`/`validatePacked` remain as the numeric-argument fallback
+ * (string arguments are per-DLL-build: probe before depending on them).
+ *
+ * Build:  powershell -File build.ps1 [-OutputName ESONJsonN]
+ * Test:   probes/eson-benchmark.jsx (native.bindings) inside Illustrator.
  */
 #include "eson_abi.h"
 
@@ -45,10 +54,14 @@ static size_t g_in16_cap = 0;
 
 static long g_last_arg_tag = -1; /* ABI evidence: which tag the host used */
 
-#define STATIC_RET_CAP (64 * 1024)
-static char g_static_ret[STATIC_RET_CAP]; /* escapeDirect static return */
-
 /* -------------------------------------------------------------- helpers */
+static void clear_retval(TaggedData *retval) {
+    if (!retval) return;
+    retval->data.intval = 0;
+    retval->type = kTypeUndefined;
+    retval->filler = 0;
+}
+
 static void set_double(TaggedData *result, double value) {
     if (!result) return;
     result->data.fltval = value;
@@ -56,41 +69,46 @@ static void set_double(TaggedData *result, double value) {
     result->filler = 0;
 }
 
-static void set_undefined(TaggedData *result) {
+static void set_integer(TaggedData *result, long value) {
     if (!result) return;
-    result->data.intval = 0;
-    result->type = kTypeUndefined;
+    result->data.intval = value;
+    result->type = kTypeInteger;
     result->filler = 0;
 }
 
-static void set_static_string(TaggedData *result, const char *value) {
+/* kTypeString (4): the returned buffer must be malloc'd - ExtendScript
+ * frees it via ESFreeMem (this DLL's ESFreeMem = free). */
+static void set_string(TaggedData *result, char *value) {
     if (!result) return;
-    result->data.string = (char *)(value ? value : "");
+    result->data.string = value ? value : (char *)"";
     result->type = kTypeString;
     result->filler = 0;
 }
 
-static int raw_string_arg(TaggedData *argv, intptr_t argc, intptr_t index,
-                          const char **value, long *tag) {
-    char *base;
-    long type = 0;
-    char *ptr = NULL;
+static int string_arg(TaggedData *argv, long argc, long index,
+                      const char **value, long *tag) {
     if (!argv || index < 0 || index >= argc) return 0;
-    base = (char *)argv + (index * 16);
-    memcpy(&ptr, base, sizeof(ptr));
-    memcpy(&type, base + 8, sizeof(type));
-    *tag = type;
-    if (!ptr) return 0;
-    if (type != kTypeString && type != 4) return 0; /* observed _a tag is 4 */
-    *value = ptr;
+    if (argv[index].type != kTypeString) return 0; /* _s signature cast */
+    if (tag) *tag = argv[index].type;
+    *value = argv[index].data.string ? argv[index].data.string : "";
     return 1;
 }
 
-static size_t utf8_strlen(const char *s) {
-    size_t n = 0;
-    if (!s) return 0;
-    while (s[n]) n++;
-    return n;
+static long arg_as_long(TaggedData *a) {
+    if (a->type == kTypeDouble) return (long)a->data.fltval;
+    if (a->type == kTypeInteger || a->type == kTypeUInteger) return a->data.intval;
+    return -1; /* invalid */
+}
+
+static char *dup_string(const char *s) {
+    size_t len;
+    char *out;
+    if (!s) s = "";
+    len = strlen(s);
+    out = (char *)malloc(len + 1);
+    if (!out) return NULL;
+    memcpy(out, s, len + 1);
+    return out;
 }
 
 /* --------------------------------------------------------- JSON validator */
@@ -342,9 +360,8 @@ static int escape_json(const char *s, size_t n) {
 
 /* --------------------------------------------------------- UTF-16 variant */
 /* The packed transport moves UTF-16 code units (3 per IEEE-754 double, 48 of
- * 53 exact bits) because string arguments are unreliable on this host. The
- * validator works on 16-bit code units; the kTypeScript return converts back
- * to UTF-8 (the host's documented script-string encoding). */
+ * 53 exact bits) as the numeric-argument fallback when string args do not
+ * bind on a given DLL build. The validator works on 16-bit code units. */
 
 static int validate_value16(const uint16_t *s, size_t n, size_t *i, int depth);
 
@@ -527,30 +544,133 @@ static int utf16_to_utf8(const uint16_t *s, size_t n, char *out, size_t cap) {
     return 0;
 }
 
-/* -------------------------------------------------------------- exports */
-static char *dup_string(const char *s) {
-    size_t len;
+/* ------------------------------------------------- packed 2-bytes-per-char */
+/* The verified bulk channel (Illustrator 30.6.0): each returned char packs
+ * TWO input bytes (b0 | b1<<8), so JSX reads N units with N/2 charCodeAt
+ * calls plus arithmetic (~1.75x) and writes with N/2 fromCharCode plus one
+ * native unpack (~3.7x). Byte-oriented: pairs whose second byte is
+ * 0xD8-0xDF would hit the UTF-8 surrogate window in the packed value -
+ * ASCII/Latin-1 inputs are safe; arbitrary bytes travel as hex. */
+
+static int pack_bytes(const unsigned char *in, size_t n, char **outp) {
+    size_t outlen = (n + 1) / 2;
+    size_t cap = outlen * 3 + 1; /* worst case: 3 UTF-8 bytes per packed char */
+    size_t o = 0;
+    size_t i;
     char *out;
-    if (!s) s = "";
-    len = strlen(s);
-    out = (char *)malloc(len + 1);
-    if (!out) return NULL;
-    memcpy(out, s, len + 1);
-    return out;
+    out = (char *)malloc(cap);
+    if (!out) return -1;
+    for (i = 0; i + 1 < n; i += 2) {
+        unsigned v = (unsigned)in[i] | ((unsigned)in[i + 1] << 8);
+        if (v < 0x80) {
+            out[o++] = (char)v;
+        } else if (v < 0x800) {
+            out[o++] = (char)(0xC0 | (v >> 6));
+            out[o++] = (char)(0x80 | (v & 0x3F));
+        } else {
+            out[o++] = (char)(0xE0 | (v >> 12));
+            out[o++] = (char)(0x80 | ((v >> 6) & 0x3F));
+            out[o++] = (char)(0x80 | (v & 0x3F));
+        }
+    }
+    if (i < n) {
+        unsigned v = (unsigned)in[i]; /* last odd byte: pack with high byte 0 */
+        if (v < 0x80) {
+            out[o++] = (char)v;
+        } else {
+            out[o++] = (char)(0xC0 | (v >> 6));
+            out[o++] = (char)(0x80 | (v & 0x3F));
+        }
+    }
+    out[o] = '\0';
+    *outp = out;
+    return 0;
 }
 
+static int unpack_bytes(const char *packed, size_t n, char **outp, size_t *outlenp) {
+    const unsigned char *p = (const unsigned char *)packed;
+    const unsigned char *end = p + n;
+    size_t outcap;
+    size_t o = 0;
+    char *out;
+    /* worst case: 2 output bytes per packed char */
+    outcap = n * 2 + 1;
+    out = (char *)malloc(outcap);
+    if (!out) return -1;
+    while (p < end) {
+        unsigned char b0 = p[0];
+        unsigned int cp;
+        size_t used;
+        if (b0 < 0x80) { cp = b0; used = 1; }
+        else if (b0 >= 0xc2 && b0 <= 0xdf && p + 1 < end) { cp = ((b0 & 0x1f) << 6) | (p[1] & 0x3f); used = 2; }
+        else if (b0 >= 0xe0 && b0 <= 0xef && p + 2 < end) { cp = ((b0 & 0x0f) << 12) | ((p[1] & 0x3f) << 6) | (p[2] & 0x3f); used = 3; }
+        else { free(out); return -1; }
+        p += used;
+        out[o++] = (char)(cp & 0xFF);
+        if (cp >= 0x100) out[o++] = (char)((cp >> 8) & 0xFF);
+    }
+    out[o] = '\0';
+    *outp = out;
+    if (outlenp) *outlenp = o;
+    return 0;
+}
+
+/* ---------------------------------------------------- whole-native utils */
+static const char hex_lower[] = "0123456789abcdef";
+
+static int hex_encode(const char *in, size_t n, char **outp) {
+    size_t i;
+    char *out;
+    out = (char *)malloc(n * 2 + 1);
+    if (!out) return -1;
+    for (i = 0; i < n; i++) {
+        out[i * 2] = hex_lower[((unsigned char)in[i]) >> 4];
+        out[i * 2 + 1] = hex_lower[((unsigned char)in[i]) & 0xF];
+    }
+    out[n * 2] = '\0';
+    *outp = out;
+    return 0;
+}
+
+static unsigned crc32_bytes(const unsigned char *p, size_t n) {
+    static unsigned tab[256];
+    static int tab_init = 0;
+    size_t i;
+    unsigned crc;
+    if (!tab_init) {
+        unsigned t;
+        for (t = 0; t < 256; t++) {
+            unsigned c = t;
+            int k;
+            for (k = 0; k < 8; k++) {
+                c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            }
+            tab[t] = c;
+        }
+        tab_init = 1;
+    }
+    crc = 0xFFFFFFFFu;
+    for (i = 0; i < n; i++) {
+        crc = tab[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+/* ------------------------------------------------------------- exports */
+/* Mandatory entry points. ESInitialize returns the signature string
+ * (malloc'd - freed via ESFreeMem like any returned string). */
 EO_EXPORT char *ESInitialize(TaggedData *argv, long argc) {
     (void)argv;
     (void)argc;
-    return dup_string("ping_f,version_f,stage_s,stagedBytes_f,lastArgTag_f,"
-                      "validateStaged_f,escapeStaged_f,escapedBytes_f,nextByte_f,"
-                      "escapeDirect_s,resetState_f,validateText_a,stagePacked,"
-                      "validatePacked,evalJson");
+    return dup_string("ping_f,version_f,stage_s,stagedBytes_f,validateStaged_f,"
+                      "escapeStaged_f,escapedBytes_f,nextByte_f,escapeDirect_s,"
+                      "resetState_f,validateText_s,packBytes_s,unpackBytes_s,"
+                      "hexEncode_s,crc32_s,stagePacked,validatePacked,evalJson");
 }
 
 EO_EXPORT long ESGetVersion(void) { return 1; }
 
-EO_EXPORT void ESFreeMem(void *p) { (void)p; /* conservative no-op (POC) */ }
+EO_EXPORT void ESFreeMem(void *p) { free(p); }
 
 EO_EXPORT void ESTerminate(void) {
     free(g_in); g_in = NULL; g_in_cap = 0; g_in_len = 0;
@@ -558,158 +678,222 @@ EO_EXPORT void ESTerminate(void) {
     free(g_in16); g_in16 = NULL; g_in16_cap = 0; g_in16_len = 0;
 }
 
-#define EXPORT_FN(name) \
-    EO_EXPORT void name(void *p1, void *p2, void *p3) { \
-        TaggedData *argv = (TaggedData *)p1; \
-        intptr_t argc = (intptr_t)p2; \
-        TaggedData *result = (TaggedData *)p3; \
-        (void)argv; (void)argc;
+/* Direct methods: documented shape `long fn(TaggedData*, long, TaggedData*)`
+ * returning kESErrOK (0) or a non-negative catchable code. Never return
+ * negative codes (fatal, uncatchable). */
 
-#define EXPORT_END }
+EO_EXPORT long ping(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, 42.0);
+    return kESErrOK;
+}
 
-EXPORT_FN(ping)
-    set_double(result, 42.0);
-EXPORT_END
+EO_EXPORT long version(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, 2.0); /* ABI-generation 2: canonical tags + long shape */
+    return kESErrOK;
+}
 
-EXPORT_FN(version)
-    set_double(result, 1.0);
-EXPORT_END
-
-EXPORT_FN(stage)
+EO_EXPORT long stage(TaggedData *argv, long argc, TaggedData *retval) {
     const char *value = NULL;
     long tag = -1;
     size_t len;
-    set_undefined(result);
-    if (!raw_string_arg(argv, argc, 0, &value, &tag)) return;
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
     g_last_arg_tag = tag;
-    len = utf8_strlen(value);
+    len = strlen(value);
     if (len + 1 > g_in_cap || !g_in) {
         char *nb = (char *)realloc(g_in, len + 1);
-        if (!nb) return;
+        if (!nb) return kESErrNoMemory;
         g_in = nb;
         g_in_cap = len + 1;
     }
     memcpy(g_in, value, len + 1);
     g_in_len = len;
-    set_double(result, (double)len);
-EXPORT_END
+    set_double(retval, (double)len);
+    return kESErrOK;
+}
 
-EXPORT_FN(stagedBytes)
-    set_double(result, (double)g_in_len);
-EXPORT_END
+EO_EXPORT long stagedBytes(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, (double)g_in_len);
+    return kESErrOK;
+}
 
-EXPORT_FN(lastArgTag)
-    set_double(result, (double)g_last_arg_tag);
-EXPORT_END
+EO_EXPORT long lastArgTag(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, (double)g_last_arg_tag);
+    return kESErrOK;
+}
 
-EXPORT_FN(validateStaged)
-    set_double(result, (double)validate_json(g_in ? g_in : "", g_in_len));
-EXPORT_END
+EO_EXPORT long validateStaged(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, (double)validate_json(g_in ? g_in : "", g_in_len));
+    return kESErrOK;
+}
 
-EXPORT_FN(escapeStaged)
+EO_EXPORT long escapeStaged(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
     if (escape_json(g_in ? g_in : "", g_in_len) != 0) {
-        set_double(result, -1.0);
-        return;
+        set_double(retval, -1.0);
+        return kESErrNoMemory;
     }
-    set_double(result, (double)g_out_len);
-EXPORT_END
+    set_double(retval, (double)g_out_len);
+    return kESErrOK;
+}
 
-EXPORT_FN(escapedBytes)
-    set_double(result, (double)g_out_len);
-EXPORT_END
+EO_EXPORT long escapedBytes(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, (double)g_out_len);
+    return kESErrOK;
+}
 
-EXPORT_FN(nextByte)
+EO_EXPORT long nextByte(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
     if (!g_out || g_out_cursor >= g_out_len) {
-        set_double(result, -1.0);
-        return;
+        set_double(retval, -1.0);
+        return kESErrOK;
     }
-    set_double(result, (double)(unsigned char)g_out[g_out_cursor]);
+    set_double(retval, (double)(unsigned char)g_out[g_out_cursor]);
     g_out_cursor++;
-EXPORT_END
+    return kESErrOK;
+}
 
-/* EXPERIMENT: direct string return. Static buffer; ABI-fragile per the POC. */
-EXPORT_FN(escapeDirect)
+/* Single-call escape: string in, escaped string out (kTypeString=4,
+ * malloc'd, freed by ESFreeMem). */
+EO_EXPORT long escapeDirect(TaggedData *argv, long argc, TaggedData *retval) {
     const char *value = NULL;
     long tag = -1;
     size_t len;
-    int r;
-    set_undefined(result);
-    if (!raw_string_arg(argv, argc, 0, &value, &tag)) return;
+    char *out;
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
     g_last_arg_tag = tag;
-    len = utf8_strlen(value);
+    len = strlen(value);
     if (len + 1 > g_in_cap || !g_in) {
         char *nb = (char *)realloc(g_in, len + 1);
-        if (!nb) return;
+        if (!nb) return kESErrNoMemory;
         g_in = nb;
         g_in_cap = len + 1;
     }
     memcpy(g_in, value, len + 1);
     g_in_len = len;
-    r = escape_json(g_in, g_in_len);
-    if (r != 0) return;
-    if (g_out_len >= STATIC_RET_CAP) return;
-    memcpy(g_static_ret, g_out, g_out_len);
-    g_static_ret[g_out_len] = 0;
-    set_static_string(result, g_static_ret);
-EXPORT_END
+    if (escape_json(g_in, g_in_len) != 0) return kESErrNoMemory;
+    out = (char *)malloc(g_out_len + 1);
+    if (!out) return kESErrNoMemory;
+    memcpy(out, g_out, g_out_len + 1);
+    set_string(retval, out);
+    return kESErrOK;
+}
 
-EXPORT_FN(resetState)
+EO_EXPORT long resetState(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
     g_in_len = 0;
     g_out_len = 0;
     g_out_cursor = 0;
     g_last_arg_tag = -1;
-    set_double(result, 0.0);
-EXPORT_END
+    set_double(retval, 0.0);
+    return kESErrOK;
+}
 
-/* Direct single-call gate: validates the argument string, returns the code. */
-EXPORT_FN(validateText)
+/* Single-call strict JSON gate (the whole-workload-native replacement for
+ * the JSX charCodeAt scanner): string in, verdict out (0 = valid). */
+EO_EXPORT long validateText(TaggedData *argv, long argc, TaggedData *retval) {
     const char *value = NULL;
     long tag = -1;
-    if (raw_string_arg(argv, argc, 0, &value, &tag)) {
-        size_t len = utf8_strlen(value);
-        set_double(result, (double)validate_json(value, len));
-    } else {
-        set_double(result, -999.0);
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) {
+        set_double(retval, -999.0); /* ABI evidence: arg did not arrive as string */
+        return kESErrOK;
     }
-EXPORT_END
+    g_last_arg_tag = tag;
+    set_double(retval, (double)validate_json(value, strlen(value)));
+    return kESErrOK;
+}
 
+/* packBytes(s) -> packed 2-bytes-per-char string (the bulk charCodeAt
+ * replacement; see pack_bytes comment for the surrogate-window caveat). */
+EO_EXPORT long packBytes(TaggedData *argv, long argc, TaggedData *retval) {
+    const char *value = NULL;
+    long tag = -1;
+    char *out = NULL;
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    g_last_arg_tag = tag;
+    if (pack_bytes((const unsigned char *)value, strlen(value), &out) != 0) {
+        return kESErrNoMemory;
+    }
+    set_string(retval, out);
+    return kESErrOK;
+}
 
+EO_EXPORT long unpackBytes(TaggedData *argv, long argc, TaggedData *retval) {
+    const char *value = NULL;
+    long tag = -1;
+    char *out = NULL;
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    g_last_arg_tag = tag;
+    if (unpack_bytes(value, strlen(value), &out, NULL) != 0) {
+        return kESErrBadArgumentList; /* not valid packed data */
+    }
+    set_string(retval, out);
+    return kESErrOK;
+}
 
+EO_EXPORT long hexEncode(TaggedData *argv, long argc, TaggedData *retval) {
+    const char *value = NULL;
+    long tag = -1;
+    char *out = NULL;
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    g_last_arg_tag = tag;
+    if (hex_encode(value, strlen(value), &out) != 0) return kESErrNoMemory;
+    set_string(retval, out);
+    return kESErrOK;
+}
 
+EO_EXPORT long crc32(TaggedData *argv, long argc, TaggedData *retval) {
+    const char *value = NULL;
+    long tag = -1;
+    clear_retval(retval);
+    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    g_last_arg_tag = tag;
+    set_integer(retval, (long)crc32_bytes((const unsigned char *)value, strlen(value)));
+    return kESErrOK;
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/* ---- packed numeric transport (string args unreliable on this host) ------ */
+/* ---- packed numeric transport (fallback when string args do not bind) --- */
 /* stagePacked(len, p0, p1, ...): each double carries 3 UTF-16 code units in
- * its low 48 bits (integers are exact through 53 bits). Numeric arguments
- * are the reliably-bound path (measured). */
-EXPORT_FN(stagePacked)
-    double lenD = argv[0].data.fltval;
-    size_t len = (size_t)lenD;
+ * its low 48 bits (integers are exact through 53 bits). No declared
+ * signature (variadic numeric arguments are the reliably-bound path). */
+EO_EXPORT long stagePacked(TaggedData *argv, long argc, TaggedData *retval) {
+    double lenD;
+    size_t len;
     size_t i;
     size_t filled = 0;
-    if (argc < 1 || len == 0 || len > 0x400000) {
-        set_double(result, -2.0);
-        return;
+    clear_retval(retval);
+    if (argc < 1) return kESErrBadArgumentList;
+    lenD = argv[0].data.fltval;
+    len = (size_t)lenD;
+    if (len == 0 || len > 0x400000) {
+        set_double(retval, -2.0);
+        return kESErrOK;
     }
     if (len > g_in16_cap || !g_in16) {
         uint16_t *nb = (uint16_t *)realloc(g_in16, len * sizeof(uint16_t));
         if (!nb) {
-            set_double(result, -3.0);
-            return;
+            set_double(retval, -3.0);
+            return kESErrOK;
         }
         g_in16 = nb;
         g_in16_cap = len;
@@ -722,27 +906,40 @@ EXPORT_FN(stagePacked)
         if (filled < len) g_in16[filled++] = (uint16_t)((uv >> 32) & 0xFFFFu);
     }
     g_in16_len = len;
-    set_double(result, (double)filled);
-EXPORT_END
+    set_double(retval, (double)filled);
+    return kESErrOK;
+}
 
-EXPORT_FN(validatePacked)
-    set_double(result, (double)validate_json16(g_in16 ? g_in16 : NULL, g_in16_len));
-EXPORT_END
+EO_EXPORT long validatePacked(TaggedData *argv, long argc, TaggedData *retval) {
+    (void)argv; (void)argc;
+    clear_retval(retval);
+    set_double(retval, (double)validate_json16(g_in16 ? g_in16 : NULL, g_in16_len));
+    return kESErrOK;
+}
 
-/* kTypeScript return: validates the packed text, then returns it as a Script
- * TaggedData which the host evaluates - the JSX side receives the value
- * directly (no drain, no explicit eval). Returns undefined unless the input
- * conforms to the strict grammar; the security boundary is validate_json16. */
-EXPORT_FN(evalJson)
+/* kTypeScript (125) return: validates the packed text, then returns it as a
+ * Script TaggedData - the host evaluates it and returns the result (the
+ * verified 2026-08-07 mechanism; the old reconstruction tag 8 never fired).
+ * Security boundary preserved: only validate_json16-clean text is ever
+ * returned as a script. Cost is superlinear in the host eval - keep payloads
+ * small (~2-4 K units); do NOT build bulk-read pipelines on this. */
+EO_EXPORT long evalJson(TaggedData *argv, long argc, TaggedData *retval) {
+    char *out;
+    size_t cap;
+    clear_retval(retval);
+    (void)argv; (void)argc;
     if (!g_in16 || validate_json16(g_in16, g_in16_len) != 0) {
-        set_undefined(result);
-        return;
+        return kESErrOK; /* undefined */
     }
-    if (utf16_to_utf8(g_in16, g_in16_len, g_static_ret, STATIC_RET_CAP) != 0) {
-        set_undefined(result);
-        return;
+    cap = g_in16_len * 3 + 1; /* UTF-16 -> UTF-8 worst case */
+    out = (char *)malloc(cap);
+    if (!out) return kESErrNoMemory;
+    if (utf16_to_utf8(g_in16, g_in16_len, out, cap) != 0) {
+        free(out);
+        return kESErrOK; /* undefined */
     }
-    result->data.string = g_static_ret;
-    result->type = kTypeScript;
-    result->filler = 0;
-EXPORT_END
+    retval->data.string = out;
+    retval->type = kTypeScript;
+    retval->filler = 0;
+    return kESErrOK;
+}

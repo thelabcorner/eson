@@ -38,6 +38,18 @@ export interface EsonCapabilities {
     globalJsonPresent: boolean;
     localJsonPresent: boolean;
   };
+  native?: EsonNativeCaps;
+}
+
+// ExternalObject-accelerated gate status (full build only; enabled solely by
+// the explicit ESON.enableNativeGate() call - never by default).
+export interface EsonNativeCaps {
+  present: boolean; // ExternalObject global exists in this engine
+  enabled: boolean; // native gate certified and active
+  reason: string; // disabled reason ('' when enabled)
+  dll: string; // DLL name that was loaded
+  dllVersion: number; // ESGetVersion value
+  certified: number; // parity corpus cases certified at enable
 }
 
 export interface FastOptions {

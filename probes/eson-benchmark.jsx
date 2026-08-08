@@ -64,8 +64,23 @@
   try {
     var prev = ExternalObject.searchFolders;
     ExternalObject.searchFolders = nativeDir + ';' + (prev || '');
-    var libName = ExternalObject.search('lib:ESONJsonFinal') ? 'lib:ESONJsonFinal' : 'lib:ESONJson';
+    // Round-2 build (canonical ABI, version 2) is ESONJson.dll; the round-1
+    // lettered artifacts (ESONJsonFinal/P/T/U/V) are the retired ABI and are
+    // only loaded as an explicit fallback for historical comparisons.
+    var libName = 'lib:ESONJson';
     lib = new ExternalObject(libName);
+    if (lib && Number(lib.version(0)) < 2) {
+      // stale round-1 ESONJson.dll on disk - fall back to the lettered
+      // round-1 artifact and record it
+      var prevLib = lib;
+      lib = null;
+      try { prevLib.unload(); } catch (e) {}
+      libName = ExternalObject.search('lib:ESONJsonFinal') ? 'lib:ESONJsonFinal' : 'lib:ESONJsonP';
+      lib = new ExternalObject(libName);
+      R['native.dllBuild'] = libName;
+    } else {
+      R['native.dllBuild'] = libName + ' (ABI gen ' + String(Number(lib.version(0))) + ')';
+    }
     if (lib && Number(lib.version(0)) >= 1 && Number(lib.ping(0)) === 42) nativeLoaded = true;
     else if (lib) nativeError = 'smoke failed (version/ping)';
   } catch (e) { nativeError = String(e); }
@@ -260,31 +275,153 @@
   // kill the eval here, but the JSX results are already persisted) ------------
   var nativeInfo = {};
   if (nativeLoaded) {
-    // Binding evidence from the ABI bisect (eson-dll-probe runs): ping/version/
-    // escapeStaged/nextByte/resetState bind and run; stage/validateStaged/
-    // stagedBytes/lastArgTag/escapedBytes/escapeDirect throw host errors that
-    // BYPASS JavaScript try/catch on Illustrator 30.6.0. Only the reliable
-    // methods are touched here; the unreliable ones are recorded, not probed.
+    // Live per-method binding probe. The OLD ESONJson ABI (void* exports,
+    // reconstructed tags 1/4/8, _a signatures) left stage/validateStaged/
+    // escapedBytes/validateText unbound in BOTH live sessions. The rebuilt
+    // DLL follows the verified ArcFitEso prototype (canonical tags 4/123/125,
+    // documented `long fn(TaggedData*, long, TaggedData*)` prototypes, _s
+    // signatures, malloc + ESFreeMem=free) whose every method bound on the
+    // same host - but binding is still per-DLL-build: probe each method,
+    // record the result, and gate the lanes on what actually bound.
+    var probe = function (name, fn) {
+      try {
+        fn();
+        return 'ok';
+      } catch (e) { return 'ERR:' + String(e); }
+    };
     var bindings = {
-      ping: 'ok', version: 'ok', stage: 'ERR:host-bypass-error (unreliable)',
-      validateStaged: 'ERR:host-bypass-error (unreliable)',
-      escapeStaged: 'ok', escapedBytes: 'ERR:host-bypass-error (unreliable)',
-      nextByte: 'ok', validateText: 'ERR:host-bypass-error (unreliable)'
+      ping: probe('ping', function () { lib.ping(0); }),
+      version: probe('version', function () { lib.version(0); }),
+      stage: probe('stage', function () { lib.stage('{"a":1}'); }),
+      validateStaged: probe('validateStaged', function () { lib.validateStaged(0); }),
+      escapeStaged: probe('escapeStaged', function () { lib.escapeStaged(0); }),
+      nextByte: probe('nextByte', function () { lib.nextByte(0); }),
+      escapeDirect: probe('escapeDirect', function () { lib.escapeDirect('a"b'); }),
+      validateText: probe('validateText', function () { lib.validateText('{"a":1}'); }),
+      packBytes: probe('packBytes', function () { lib.packBytes('ab'); }),
+      unpackBytes: probe('unpackBytes', function () { lib.unpackBytes('ab'); }),
+      hexEncode: probe('hexEncode', function () { lib.hexEncode('ab'); }),
+      crc32: probe('crc32', function () { lib.crc32('abc'); }),
+      stagePacked: probe('stagePacked', function () { lib.stagePacked(3, 0x61, 0x62, 0x63); }),
+      validatePacked: probe('validatePacked', function () { lib.validatePacked(0); })
     };
     R['native.bindings'] = JSON.stringify(bindings);
-    R['native.bindingEvidence'] = 'from eson-dll-probe bisect: string-arg methods and several no-arg methods throw host errors that bypass JS try/catch; chunkdb POC DLL shows the same class of per-method failures';
+    R['native.bindingEvidence'] = 'per-method live probe on the rebuilt ABI (canonical tags 4/123/125, long prototypes, _s signatures, malloc+free). Old-DLL binding failures tracked the DLL build; ArcFitEso-prototype methods bound on the same host.';
     writeReport();
 
-    // boundary microbenchmark - the only reliably measurable native lane
+    var reliable = function (name) { return String(bindings[name]).indexOf('ok') === 0; };
+    var strOk = reliable('validateText') && reliable('packBytes') && reliable('unpackBytes') &&
+                reliable('escapeDirect') && reliable('stage');
+
+    // boundary microbenchmark - the only universally-safe lane
     var b1 = timeLane(function () { Number(lib.ping(0)); }, WARM, ITERS);
     row('native.ping', 'boundary', b1, 0);
     R['rows'] = rows;
     writeReport();
 
-    // gate/escape lanes are not measurable through this ABI on this host
-    rows.push({ lane: 'native.validate', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'stage/validateStaged binding broken on Illustrator 30.6.0' });
-    rows.push({ lane: 'nativeGate+eval', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'stage/validateStaged binding broken on Illustrator 30.6.0' });
-    rows.push({ lane: 'native.escape+drain', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'stage binding broken on Illustrator 30.6.0' });
+    if (!strOk) {
+      rows.push({ lane: 'native.validate', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'string methods unbound on this DLL build (binding is per-DLL-build; rebuild with a fresh DLL name)' });
+      rows.push({ lane: 'nativeGate+eval', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'string methods unbound on this DLL build' });
+      rows.push({ lane: 'native.escape+drain', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'string methods unbound on this DLL build' });
+      rows.push({ lane: 'native.packed.read', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'packBytes unbound on this DLL build' });
+      rows.push({ lane: 'native.packed.write', payload: 'all', medianUs: -1, minUs: -1, p95Us: -1, bytes: 0, skipped: 'packBytes unbound on this DLL build' });
+    } else {
+      // Tier 1: whole-workload-native gate. validateText = ONE crossing; the
+      // C validator replaces the charCodeAt scanner walk entirely
+      // (ArcFitEso measured whole-workload-native at 4,800-11,900x).
+      for (pi = 0; pi < payloads.length; pi++) {
+        var nv = payloads[pi];
+        var nbytes = nv.text.length;
+        var nv1 = timeLane(function () { Number(lib.validateText(nv.text)); }, WARM, itersFor(nv.name));
+        row('native.validate', nv.name, nv1, nbytes);
+        // native gate + engine eval = the tier-1 replacement for pre-scan + eval
+        var nv2 = timeLane(function () {
+          if (Number(lib.validateText(nv.text)) === 0) eval('(' + nv.text + ')');
+        }, WARM, itersFor(nv.name));
+        row('nativeGate+eval', nv.name, nv2, nbytes);
+      }
+      // native verdict parity spot-check vs the JSX gate on the invalid corpus
+      // (NOT the JSONTestSuite corpus - the native validator has no corpus
+      // parity evidence yet; that is the gate before it could ever front eval)
+      var nativeRejected = 0;
+      for (ci = 0; ci < invalidF.length; ci++) {
+        var nt = invalidF[ci];
+        try { if (Number(lib.validateText(nt)) !== 0) nativeRejected++; }
+        catch (e) { nativeRejected = -999; break; }
+      }
+      nativeInfo.verdictParity = String(nativeRejected) + '/' + String(invalidF.length) + ' invalid rejected natively (JSX gate: ' + String(esonMismatch) + ' accepted)';
+      check('native.verdict-parity', String(nativeRejected) === String(invalidF.length), nativeInfo.verdictParity);
+
+      // escape: single-call string channel vs the legacy byte-drain
+      var e1 = timeLane(function () { lib.escapeDirect(controlString); }, WARM, MEDIUM);
+      row('native.escapeDirect', 'control-4k', e1, controlString.length);
+      var e2 = timeLane(function () {
+        lib.stage(controlString);
+        lib.escapeStaged(0);
+        var n = Number(lib.escapedBytes(0));
+        var b = '', i2;
+        for (i2 = 0; i2 < n && i2 < 4096; i2++) b += String.fromCharCode(Number(lib.nextByte(0)));
+      }, WARM, MEDIUM);
+      row('native.escape+drain', 'control-4k', e2, controlString.length);
+
+      // Tier 2: packed 2-bytes-per-char channel vs the charCodeAt loops
+      // (ASCII payload only: a packed pair whose second byte is 0xD8-0xDF
+      // would hit the UTF-8 surrogate window and cannot round-trip)
+      var asciiText = payloads[1].text; // profiles6 - pure ASCII
+      var kk;
+      var readLoop = function () {
+        var s = 0;
+        for (kk = 0; kk < asciiText.length; kk++) s += asciiText.charCodeAt(kk);
+        return s;
+      };
+      var packedReadLoop = function () {
+        var p = lib.packBytes(asciiText);
+        var s = 0, c;
+        for (kk = 0; kk < p.length; kk++) { c = p.charCodeAt(kk); s += (c & 255) + (c >> 8); }
+        return s;
+      };
+      var r1 = timeLane(readLoop, WARM, MEDIUM);
+      row('native.packed.read', 'profiles6', r1, asciiText.length);
+      var r2 = timeLane(packedReadLoop, WARM, MEDIUM);
+      row('native.packed.read.packed', 'profiles6', r2, asciiText.length);
+
+      var writeSrc = payloads[1].text.substring(0, 16384);
+      var writeLoop = function () {
+        var out = [], q;
+        for (q = 0; q < writeSrc.length; q++) out.push(String.fromCharCode(writeSrc.charCodeAt(q)));
+        return out.join('');
+      };
+      var packedWriteLoop = function () {
+        var out = [], q;
+        for (q = 0; q + 1 < writeSrc.length; q += 2) {
+          out.push(String.fromCharCode((writeSrc.charCodeAt(q) & 0xFF) | ((writeSrc.charCodeAt(q + 1) & 0xFF) << 8)));
+        }
+        if (q < writeSrc.length) out.push(String.fromCharCode(writeSrc.charCodeAt(q) & 0xFF));
+        return lib.unpackBytes(out.join(''));
+      };
+      var w1 = timeLane(writeLoop, WARM, MEDIUM);
+      row('native.packed.write', '16k', w1, writeSrc.length);
+      var w2 = timeLane(packedWriteLoop, WARM, MEDIUM);
+      row('native.packed.write.packed', '16k', w2, writeSrc.length);
+
+      // packed numeric fallback (3 units per double) - the transport that
+      // worked even when string args did not bind on the old DLL build
+      if (reliable('stagePacked') && reliable('validatePacked')) {
+        var stText = payloads[0].text;
+        var stPacks = [];
+        for (kk = 0; kk < stText.length; kk += 3) {
+          stPacks.push(stText.charCodeAt(kk) +
+            (kk + 1 < stText.length ? stText.charCodeAt(kk + 1) * 65536 : 0) +
+            (kk + 2 < stText.length ? stText.charCodeAt(kk + 2) * 4294967296 : 0));
+        }
+        var pv1 = timeLane(function () {
+          var args = [stText.length].concat(stPacks);
+          lib.stagePacked.apply(lib, args);
+          return Number(lib.validatePacked(0));
+        }, WARM, MEDIUM);
+        row('native.packed16.gate', 'settings', pv1, stText.length);
+      }
+    }
     R['native.abi'] = JSON.stringify(nativeInfo);
     R['rows'] = rows;
     writeReport();

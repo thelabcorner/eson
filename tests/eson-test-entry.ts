@@ -409,6 +409,43 @@ for (i = 0; i < xinvalid.length; i++) {
 }
 ok(xmismatch === 0, 'gate.xcheck.agree', xmismatch + ' mismatches');
 
+// Regex-hang regression class: the old rx_protect alternation-star hung the
+// ExtendScript regex engine (100% CPU) on strings ending in a lone
+// backslash - JSONTestSuite n_string_1_surrogate_then_escape was the live
+// repro (2026-08-07). V8 does not hang, so the Node side asserts the
+// VERDICTS (all must reject); the non-hang itself is verified by the live
+// corpus probe (probes/eson-corpus-parity.jsx).
+var hangClass: string[] = [
+  '["\\uD800\\"]',
+  '"\\"',
+  '"a\\"',
+  '{"k":"a\\"}',
+  '"\\x41"',
+  '"a\\qb"',
+  '"\\u12"',
+  '"abc\\u12\\"',
+  // trailing scalar junk: the skeleton masks numbers as ']' so the
+  // json2-shaped regexes cannot see them; the eval rejected them with the
+  // engine's raw "Expected: )" - now a clean pre-scan rejection
+  '{"a":1} 1',
+  '[1] 2',
+  '"x" 3',
+  '{"a":1} true',
+  '123 456'
+];
+var hangBad = 0;
+for (i = 0; i < hangClass.length; i++) {
+  var hk = hangClass[i];
+  var hThrew = false;
+  try { parseJson(hk); } catch (e) { hThrew = true; }
+  var hScan = isValidJsonTextScanner(hk);
+  if (!hThrew || hScan) {
+    hangBad++;
+    ok(false, 'gate.hangclass.' + i, JSON.stringify(hk) + ' threw=' + hThrew + ' scannerAccepted=' + hScan);
+  }
+}
+ok(hangBad === 0, 'gate.hangclass.reject', hangBad + ' accepted');
+
 var caps = detectCaps(g);
 ok(caps.json.exists === true, 'caps.json.exists');
 ok(caps.json.classification === 'native-looking', 'caps.json.classification', caps.json.classification);

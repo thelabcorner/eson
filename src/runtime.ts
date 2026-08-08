@@ -1,8 +1,9 @@
 // Runtime-only ESON entry: parse + stringify + the verdict memo + the
 // pre-scan. Everything else (rewrite, trusted codecs, stringifyFast, caps
-// detection, the native-source machinery, the benchmark block) is pruned by
-// the bundler's tree-shaking. Used for the COM tool's install wrapper: a
-// ~15.4KB vendor instead of 53.1KB cuts the per-invocation compile.
+// detection, the native-source machinery, the native gate, the benchmark
+// block) is pruned by the bundler's tree-shaking. Used for the COM tool's
+// install wrapper: a ~15.7KB vendor instead of 59.3KB cuts the
+// per-invocation compile.
 import { parseJson } from './parse';
 import { stringifyJson } from './stringify';
 import { Json2Api } from './types';

@@ -55,7 +55,19 @@ var rx_backslash_dangerous = /(?:^|[^\\])(?:\\\\)*\\[\u00ad\u0600-\u0604\u070f\u
 // protected text, and the allowed-charset (which excludes ") rejects it.
 // This makes the dedicated raw controls/js-escape checks redundant in the
 // pre-scan (the residue IS the malformed-string detector).
-var rx_protect = /"([^"\\\x00-\x1f]|\\["\\\/bfnrt]|\\u[0-9a-fA-F]{4})*"/g;
+//
+// SHAPE NOTE (hang fix, reproduced live 2026-08-07 on Illustrator 30.6.0):
+// the original alternation-star body ("[^"\\...]|\\[...]|\\u[...])*" HANGS
+// the ExtendScript regex engine on strings ending in a lone backslash
+// (JSONTestSuite n_string_1_surrogate_then_escape: ["\uD800\"] - the corpus
+// run wedged at 100% CPU; the exact standalone text reproduces it). The
+// two-pass shape is proven non-hanging: rx_two (single-pass alternation,
+// NO star - it cannot backtrack into a repeat) consumes every valid escape
+// first, leaving strings free of backslashes; the protect star is then a
+// single plain character class, which is linear. Lone/invalid backslashes
+// survive rx_two and break the body match, leaving residue that the
+// allowed-charset rejects - identical verdicts, no exponential backtracking.
+var rx_protect = /"([^"\\\x00-\x1f])*"/g;
 // Digit-anchored exponent mask: valid exponents become '#' (NOT a letter -
 // an 'X' marker would survive rx_ident_strip's [^A-Za-z] strip and falsely
 // reject every exponent number, routing them to the gate path). '#' is not a
@@ -69,7 +81,9 @@ var rx_exponent = /([0-9])[eE][+\-]?\d+/g;
 // placeholder does not need to be unique (the checks only need the strings
 // gone; '@' is excluded from the bare-key class).
 function structuralText(text: string): string {
-  return text.replace(rx_protect, '@');
+  // rx_two first (consumes every valid escape; single-pass, no star), then
+  // the plain-class protect - see the rx_protect shape note above.
+  return text.replace(rx_two, '@').replace(rx_protect, '@');
 }
 
 // Skeleton-invisible grammar violations, all in ONE native regex pass on the
@@ -208,18 +222,29 @@ function structuralScanOk(prot: string): boolean {
   var depth = 0;
   var i: number;
   var c: number;
+  var topValueSeen = false; // a top-level value was completed
   for (i = 0; i < n; i++) {
     c = struct.charCodeAt(i);
     if (c === 91 || c === 123) { // [ {
       depth++;
       if (depth > MAX_DEPTH) return false;
+      if (depth === 1) topValueSeen = false;
     } else if (c === 93 || c === 125) { // ] }
       depth--;
       if (depth < 0) return false;
+      if (depth === 0) topValueSeen = true;
     } else if (c === 44 && depth === 0) { // , at top level
       return false;
+    } else if (c === 95 && depth === 0) { // '_' (a scalar value-run) at top
+      // level: the FIRST one is the top-level scalar itself; a SECOND one
+      // after the value completed is trailing junk ("{\"a\":1} 1" - the
+      // skeleton masks it as ']' so the json2-shaped regexes cannot see it;
+      // without this check the eval rejects it with the engine's raw
+      // SyntaxError instead of ESON's clean verdict, reproduced live).
+      if (topValueSeen) return false;
+      topValueSeen = true;
     }
-    // '_' (collapsed value runs), ':' and whitespace: no state change
+    // ':' and whitespace: no state change
   }
   return true;
 }

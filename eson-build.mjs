@@ -207,7 +207,7 @@ var vendor = finalJsx + '\n' + [
 writeFileSync(join(DIST, 'vendor-eson.js'), vendor);
 
 // 4. Runtime-only vendor for the COM tool's install wrapper: tree-shaken
-//    parse+stringify core (15.4KB vs 53KB - the rewrite/trusted/fast/caps
+//    parse+stringify core (15.7KB vs 59.3KB - the rewrite/trusted/fast/caps
 //    machinery is dead weight there). Same ESON_JSON2 wrapper + shim +
 //    install footer.
 var runtimeJsx = join(DIST, 'ESON-runtime.jsx');
@@ -223,6 +223,116 @@ var runtimeVendor = runtimeFinal + '\n' + [
   ''
 ].join('\n');
 writeFileSync(join(DIST, 'vendor-eson-runtime.js'), runtimeVendor);
+
+// 5. Accelerated self-extracting bundle (ESON.accel.jsx): espack "1 + n" -
+//    ESONJson.dll is the payload, the shared esb64 accelerator is embedded
+//    automatically; the native gate enables on the espack-provided lib.
+//    Requires: ../espack (espack-build.mjs) + native/build/ESONJson.dll
+//    (npm run native-build). Skips silently when the inputs are absent.
+var ACCELERATOR = [
+  '',
+  '(function () {',
+  '  // ESON espack adapter: ESPAK.load() materializes ESONJson.dll (natively,',
+  '  // via the shared accelerator), then the ExternalObject parse gate enables',
+  '  // on the espack-provided lib. Auto-enables on eval; ESON.useEspack() is',
+  '  // the opt-in form (idempotent). ESON.espack holds the outcome.',
+  '  if (typeof ESPAK !== "object" || !ESPAK || typeof ESPAK.load !== "function") return;',
+  '  if (typeof ESON !== "object" || !ESON || typeof ESON.enableNativeGate !== "function") return;',
+  '  var cached = null;',
+  '  function useEspack() {',
+  '    var l = ESPAK.load(0);',
+  '    if (!l.ok || l.mode !== "native" || !l.lib) {',
+  '      cached = { ok: false, reason: (l && l.error) || "ESPAK load failed" };',
+  '      return cached;',
+  '    }',
+  '    var caps = ESON.enableNativeGate({ lib: l.lib, dllPath: l.path });',
+  '    cached = { ok: caps.native && caps.native.enabled === true, caps: caps.native, path: l.path };',
+  '    return cached;',
+  '  }',
+  '  ESON.useEspack = useEspack;',
+  '  ESON.espack = useEspack();',
+  '  var g = null;',
+  '  try { if (typeof $ !== "undefined" && $.global) { g = $.global; } } catch (e1) {}',
+  '  if (g) {',
+  '    g.ESON = ESON;',
+  '    g.ESPAK = ESPAK;',
+  '    // ESON vendor semantics: JSON = ESON. This also satisfies the COM',
+  '    // tool\'s ESON share-check (JSON.parse === ESON.parse), so the facade',
+  '    // stays stable on $.global instead of being replaced by the tool\'s',
+  '    // slim runtime vendor on the next eval.',
+  '    if (typeof g.JSON === "undefined" || g.JSON === null) { g.JSON = {}; }',
+  '    g.JSON.parse = ESON.parse;',
+  '    g.JSON.stringify = ESON.stringify;',
+  '  }',
+  '}());',
+  ''
+].join('\n');
+
+function buildAccel() {
+  var espackBuild = join(ROOT, '..', 'espack', 'espack-build.mjs');
+  var dll = join(ROOT, 'native', 'build', 'ESONJson.dll');
+  if (!existsSync(espackBuild)) {
+    console.log('[eson-build] accel skipped: espack repo not found at ' + join(ROOT, '..', 'espack'));
+    return;
+  }
+  if (!existsSync(dll)) {
+    console.log('[eson-build] accel skipped: ' + dll + ' missing (run npm run native-build)');
+    return;
+  }
+  var accelBundle = join(DIST, '.eson-accel-bundle.jsx');
+  execFileSync(process.execPath, [espackBuild, '--embed', dll, '--out', accelBundle,
+    '--name', 'eson', '--quiet'], { stdio: 'inherit' });
+  var bundleText = readFileSync(accelBundle, 'utf8');
+  var facadeText = readFileSync(join(DIST, 'ESON.jsx'), 'utf8');
+  var accelOut = bundleText + '\n' + facadeText + '\n' + ACCELERATOR +
+    '// ESON.accel.jsx - self-extracting single-file bundle (espack 1+n + ESON + native gate)\n';
+  writeFileSync(join(DIST, 'ESON.accel.jsx'), accelOut);
+  // Vendor copy for the COM tool (its session bootstrap evals this bundle so
+  // the wrapper's ESON share-check resolves the accelerated facade).
+  var skillVendor = join(ROOT, '..', 'agent-skills', 'illustrator-com-automation-skill', 'vendor');
+  if (existsSync(skillVendor)) {
+    writeFileSync(join(skillVendor, 'ESON.accel.jsx'), accelOut);
+    console.log('[eson-build] vendored ESON.accel.jsx -> ' + join(skillVendor, 'ESON.accel.jsx'));
+  }
+  console.log('[eson-build] wrote ' + join(DIST, 'ESON.accel.jsx') + ' (' + accelOut.length + ' bytes)');
+  minifyAccel(accelOut, skillVendor);
+}
+
+// Minify the accelerated bundle via the adobe-extendscript-minification
+// skill's conservative pipeline (UglifyJS + switch repair + directive
+// restore + node --check). The espack banner (leading block comment) is
+// extracted BEFORE minification and restored after - the conservative
+// config strips comments, and the banner identifies the generated artifact.
+function minifyAccel(accelOut, skillVendor) {
+  var skillDir = join(ROOT, '..', 'agent-skills', 'adobe-extendscript-minification');
+  var minifyScript = join(skillDir, 'scripts', 'minify-jsx.py');
+  var minifyConfig = join(skillDir, 'configs', 'conservative.json');
+  if (!existsSync(minifyScript) || !existsSync(minifyConfig)) {
+    console.log('[eson-build] accel minify skipped: minification skill not found at ' + skillDir);
+    return;
+  }
+  var m = accelOut.match(/^\/\*[\s\S]*?\*\//);
+  var banner = m ? m[0] : '';
+  var body = m ? accelOut.substring(m[0].length) : accelOut;
+  var bodyPath = join(DIST, '.eson-accel-bundle.body.jsx');
+  var minPath = join(DIST, '.eson-accel-bundle.min.jsx');
+  writeFileSync(bodyPath, body, 'utf8');
+  execFileSync('python', [minifyScript, '--in', bodyPath, '--config', minifyConfig,
+    '--out', minPath], { stdio: 'inherit' });
+  var minBody = readFileSync(minPath, 'utf8');
+  var minOut = (banner ? banner + '\n' : '') + minBody;
+  var minFinal = join(DIST, 'ESON.accel.min.jsx');
+  writeFileSync(minFinal, minOut, 'utf8');
+  if (skillVendor && existsSync(skillVendor)) {
+    writeFileSync(join(skillVendor, 'ESON.accel.min.jsx'), minOut);
+    console.log('[eson-build] vendored ESON.accel.min.jsx -> ' + join(skillVendor, 'ESON.accel.min.jsx'));
+  }
+  console.log('[eson-build] wrote ' + minFinal + ' (' + minOut.length + ' bytes, banner preserved)');
+}
+
+if (process.argv.includes('--accel')) {
+  buildAccel();
+}
 
 console.log('[eson-build] wrote ' + join(DIST, 'ESON.jsx') + ', ' + join(DIST, 'vendor-eson.js') + ', ' +
   join(DIST, 'vendor-eson-runtime.js') + ' and ' + join(DIST, 'eson-core.esm.mjs'));

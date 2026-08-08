@@ -173,3 +173,102 @@ kept. C7/E1's "~48 KB" edits were reverted by the coordinator to "43 KB".
   in CI, acceptable for README)
 - npm publish of `eson` itself not executed; `npm pack --dry-run` succeeded
   (70 files, dist artifacts included)
+
+---
+
+## Addendum 2026-08-07: native ABI rebuild (supersedes round-1 native claims)
+
+The ExternalObject ABI saga section and Known limitations were rewritten to
+the verified ArcFitEso dataset (`agent-skills/externalobject-extendscript/
+prototypes/arcfit-eso/`, live on Illustrator 30.6.0):
+
+- Round-1 claims retired: reconstructed tags 1/4/8, `(void*,void*,void*)`
+  exports, `_a` signatures, no-op ESFreeMem, "kTypeScript did NOT fire".
+- Round-2 facts recorded: canonical tags 4/123/124/125 (kTypeScript=125
+  auto-eval verified live), documented `long fn(TaggedData*, long,
+  TaggedData*)` prototypes, `_s` signatures, malloc + ESFreeMem(free),
+  string channel verified to ~360 KB per direction, packed channel
+  (packBytes/unpackBytes) 1.75x reads / 3.7x writes, whole-workload-native
+  4,800-11,900x, kTypeScript chunking measured dead end, boundary ~7 us/KB.
+- Security posture: native gate stays probe-level; the certified regex
+  pre-scan remains the default parse() gate until the C validator has
+  JSONTestSuite corpus-parity evidence.
+- `native/eson_abi.h` + `eson_json.c` rebuilt (DLL `ESONJson.dll`, version 2,
+  x64, 23 exports, built 2026-08-07); `probes/eson-benchmark.jsx` now live-
+  probes every method and gates lanes on binding; `probes/eson-json-transport
+  .jsx` prefers the string channel with the packed fallback.
+
+## Addendum 2026-08-07 (later): two-path shipping + live certification
+
+The native gate became a real opt-in product path (full build only):
+
+- New module `src/native-lane.ts`: `ESON.enableNativeGate({dir})` loads the
+  DLL, smokes it, and requires enable-time verdict-parity certification on a
+  bundled corpus (deferred cases counted separately; a gate adjudicating
+  nothing fails). `parseJson` gained an injected gate parameter - the
+  runtime build never passes it, so `vendor-eson-runtime.js` stays pure
+  JSX-only (verified: zero ExternalObject references in the bundle).
+- Full JSONTestSuite live certification passed 2026-08-07 (gate ON vs OFF
+  through the real ESON.parse wiring): y_ 95/95, n_ 184/184, i_ identical,
+  zero mismatches (probe: `probes/eson-corpus-parity.jsx`).
+- Security fixes found by the live certification (V8-based testing cannot
+  see these):
+  - NUL-truncation exploit: the boundary cuts at U+0000, so `{"a":1}\0,
+    (probe=42)` was ACCEPTED by the gate and eval EXECUTED the post-NUL
+    expression. Fixed with the channel-safety guard: raw NUL and surrogate
+    code units defer to the pre-scan (exploit re-check passes live).
+  - Pre-existing `rx_protect` alternation-star regex HANGS the ExtendScript
+    engine on strings ending in a lone backslash (JSONTestSuite
+    n_string_1_surrogate_then_escape wedged at 100% CPU). Fixed with a
+    two-pass shape; Node regression tests added.
+  - Pre-existing strictness hole: the pre-scan accepted trailing second
+    values (`{"a":1} 1`) and the eval rejected them with the engine's raw
+    "Expected: )". Fixed in the structural walk; regression tests added.
+- Sizes moved: full build 52.9 -> 59.3 KB (ESON.jsx), runtime 15.4 ->
+  15.7 KB (inert gate hook). Example 07 demonstrates the two paths live
+  (native 5.1 ms vs JSX-only 45.1 ms at 40 KB, 8.9x, all checks pass).
+
+## Addendum 2026-08-08: follow-up session (fresh re-certification + probe fixes + raw-tab corpus)
+
+Picked up from `docs/handoffs/HANDOFF_native-gate-two-path.md`. Node-side
+validation re-confirmed (tsc clean; 624 + 37 assertions). The handoff's
+remaining live actions were re-run against the final build (DLL version 2,
+Illustrator 30.6.0, running):
+
+- **Corpus parity re-certified live**: y_ 95/95, n_ 184/184, i_ 30 identical,
+  zero mismatches, gate certified 71 cases at enable. Numbers match the
+  handoff within single-run variance.
+- **Benchmark re-verified live**: 14/14 method bindings, 30/30 native verdict
+  parity, all 9 check rows pass. Speedups re-confirmed on the same host:
+  274/19 us (settings, ~14.4x), 1,317/98 us (profiles6, ~13.4x),
+  54,353/2,712 us (profiles150, ~20x) for eson.parse.cold vs nativeGate+eval.
+- **Transport probe fixed and re-verified** (`probes/eson-json-transport.jsx`):
+  - round-trip B was asserting `ESON.parse(escapeDirect(json))` - INVALID:
+    escapeDirect emits a JS-source-escaped string (quotes become \" etc.)
+    that is not JSON, so ESON.parse correctly threw. Fixed to the real
+    contract: `ESON.parse('"' + escaped + '"') === json` (verified live).
+  - packed evalJson (kTypeScript 125) auto-eval round-trip of an OBJECT
+    literal was also broken: the host evaluates the validated text as a
+    STATEMENT, and `{"a":1}` is a block-label parse error (SyntaxError:
+    Expected: ;) - the C validator rejects parenthesized text, so objects
+    cannot ride the packed auto-eval channel. Fixed the probe to round-trip
+    array/scalar/string payloads (verified live: array -> object with
+    length 3, 42 -> 42) and documented the limitation. Object payloads go
+    through the string channel, which is the primary path.
+- **Raw-tab edge (handoff §9 suspicion) RESOLVED - no divergence**: live
+  probes confirm BOTH paths agree on every raw-tab case - tab-as-whitespace
+  (`[\t1]`, `{"a":1}\t`, `\t{"a":1}`) accepted by both; a raw tab inside a
+  string literal (`"\t"`, `{"a":"\t"}`) rejected by both (JSX via the
+  rx_protect residue whose string class is \x00-\x1f, native via
+  validate_string16 c < 0x20). The stale native-lane.ts comment claiming the
+  JSX gate accepts raw tab in strings was rewritten, and the enable corpus
+  was extended with 5 raw-tab cases (3 valid whitespace, 2 invalid
+  in-string) - enable-time certification now covers 76 cases (was 71),
+  re-verified live through the real ESON.parse wiring.
+- Rebuilt dist after the corpus change; all live probes re-run on the final
+  bundle: corpus parity (76 certified, 0 mismatches), benchmark (14/14,
+  parity 30/30), transport (all lanes ok), example 07 (all 9 checks, native
+  7.4 ms vs JSX-only 64.5 ms at 40 KB, 8.7x, certified 76). `npm test`
+  624 + 37 assertions pass.
+- Nothing committed (per user decision, confirmed against the handoff's
+  §11.1/§13); git working tree carries the full two-path/native-gate diff.

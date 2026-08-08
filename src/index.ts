@@ -30,6 +30,13 @@ import { parseJson, decodeCheckedSource, evalSource } from './parse';
 import { stringifyJson } from './stringify';
 import { stringifyFastJson } from './fast';
 import {
+  enableNativeGateState,
+  disableNativeGateState,
+  nativeGate,
+  nativeGateSnapshot
+} from './native-lane';
+import { NativeGateOptions } from './native-lane';
+import {
   encodeSourceTrusted as encodeSourceImpl,
   decodeSourceTrusted as decodeSourceImpl,
   parseTrusted as parseTrustedImpl
@@ -83,12 +90,30 @@ function ensureJson2(): Json2Api {
 export function capabilities(): EsonCapabilities {
   dirty = true; // capability queries are explicit re-probes
   refresh();
-  return state.caps as EsonCapabilities;
+  var caps: EsonCapabilities = state.caps as EsonCapabilities;
+  caps.native = nativeGateSnapshot(); // never set: JSX-only path stays the default
+  return caps;
 }
 
 export function parse(text: any, reviver?: any): any {
   refresh();
-  return parseJson(text, reviver, state.json2);
+  return parseJson(text, reviver, state.json2, nativeGate());
+}
+
+// ---- ExternalObject-accelerated path (opt-in, full build only) -------------
+// The JSX-only path (default) is unchanged: parse() above only consults the
+// native gate when enableNativeGate() certified it. See native-lane.ts for
+// the security model (verdict-parity self-certification at enable, eval
+// stays the grammar checker).
+
+export function enableNativeGate(options?: NativeGateOptions): EsonCapabilities {
+  enableNativeGateState(options);
+  return capabilities();
+}
+
+export function disableNativeGate(): EsonCapabilities {
+  disableNativeGateState();
+  return capabilities();
 }
 
 export function stringify(value: any, replacer?: any, space?: any): string | undefined {

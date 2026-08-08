@@ -24,11 +24,23 @@ import { evalSourceImpl } from './eval-lane';
 // through hasOwnProperty so inherited Object.prototype members can never
 // produce false hits, and the '__proto__' key is never written (a plain
 // object assignment would set the prototype - pollution).
+// NUL guard: the ES3 engine (SpiderMonkey 2014 lineage) truncates property
+// names at U+0000 (measured live on Illustrator 30.6.0: o['a\u0000b']=1
+// stores 'a'), so a raw-NUL text would collide with its NUL-free prefix -
+// e.g. the invalid corpus case '{"a":1}\u0000,1' would write its error
+// entry under the truncated key '{"a":1}' and poison every later parse of
+// the VALID text. NUL-bearing texts are never memoized (read or write):
+// the memo must never answer for a different text.
 var memoKeys: string[] = [];
 var memoVals: any = {};
 
+function memoEligible(text: string): boolean {
+  if (text === '__proto__') return false;
+  return text.indexOf('\0') < 0;
+}
+
 function memoSet(text: string, value: any, isError: boolean): void {
-  if (text === '__proto__') return;
+  if (!memoEligible(text)) return;
   if (!Object.prototype.hasOwnProperty.call(memoVals, text)) {
     memoKeys[memoKeys.length] = text;
     if (memoKeys.length > 8) {
@@ -39,10 +51,10 @@ function memoSet(text: string, value: any, isError: boolean): void {
   memoVals[text] = { err: isError, value: value };
 }
 
-export function parseJson(text: any, reviver?: any, json2?: Json2Api | null): any {
+export function parseJson(text: any, reviver?: any, json2?: Json2Api | null, gate?: ((s: string) => number | undefined) | null): any {
   var raw = String(text);
   var noReviver = typeof reviver !== 'function';
-  if (noReviver && Object.prototype.hasOwnProperty.call(memoVals, raw)) {
+  if (noReviver && memoEligible(raw) && Object.prototype.hasOwnProperty.call(memoVals, raw)) {
     var hit: any = memoVals[raw];
     if (hit.err) throw hit.value;
     return hit.value;
@@ -50,20 +62,34 @@ export function parseJson(text: any, reviver?: any, json2?: Json2Api | null): an
   var ok = true;
   var value: any;
   try {
-    if (strictnessPreScan(raw)) {
+    var accepted = false;
+    if (gate) {
+      // ExternalObject-accelerated path (opt-in, full build only): the
+      // native validator is the gate. It only ever runs after enable-time
+      // verdict-parity certification (see native-lane.ts); the eval below
+      // remains the grammar checker and the SyntaxError catch stays. A
+      // gate verdict of undefined (call unavailable) falls back to the
+      // certified pre-scan.
+      var gv = gate(raw);
+      if (gv === 0) accepted = true;
+      else if (gv === undefined) accepted = strictnessPreScan(raw);
+    } else {
       // Fast path: the pre-scan proves eval-ability (identifiers limited to
       // true/false/null, no JS-only escapes, allowed charset, dots only
       // after digits, number boundaries, comma rules, depth) - the eval is
       // the native grammar checker. The eval throws SyntaxError on anything
-      // the checks missed (e.g. a malformed literal).
-      value = evalSourceImpl(sanitizeJsonText(raw));
-    } else {
-      // The pre-scan is certified verdict-clean (zero false-rejects: the
-      // strict protect only fails on RFC-invalid strings and every other
-      // rule is RFC-exact - certified by the fuzz accept-parity and the
+      // the checks missed (e.g. a malformed literal). The pre-scan is
+      // certified verdict-clean (zero false-rejects: the strict protect
+      // only fails on RFC-invalid strings and every other rule is
+      // RFC-exact - certified by the fuzz accept-parity and the
       // JSONTestSuite must-accept corpus, 95/95 on the fast path). A
       // pre-scan failure IS a rejection; the 8-op regex gate is no longer
       // re-run on the reject lane (measured ~1.1-1.3us/byte saved there).
+      accepted = strictnessPreScan(raw);
+    }
+    if (accepted) {
+      value = evalSourceImpl(sanitizeJsonText(raw));
+    } else {
       throw new SyntaxError('ESON.parse: invalid JSON text');
     }
   } catch (e) {

@@ -16,3 +16,8 @@ declare var $: {
   hiresTimer: number;
   global: any;
 };
+
+// Adobe ExtendScript ExternalObject (host API; runtime-guarded - the module
+// that touches it is only reachable via the explicit enableNativeGate call
+// in the full build).
+declare var ExternalObject: any;

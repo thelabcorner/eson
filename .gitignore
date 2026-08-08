@@ -9,3 +9,5 @@ native/build/
 # Credentials (never commit)
 .git-credentials
 *credentials*
+
+docs/handoffs/
