@@ -2,6 +2,9 @@
 # Finds the MSVC toolchain (VS2019/VS2022 BuildTools) + Windows SDK
 # automatically (the standard ExternalObject prototype build pattern).
 # Usage: powershell -ExecutionPolicy Bypass -File build.ps1 [-OutputName ESONJson]
+# /Brepro on the link: deterministic PE timestamp (COFF header + export
+# directory), so rebuilds are byte-identical - the accel bundle embeds the
+# DLL as base64 and the parity contract compares bytes.
 
 param(
     [string]$OutputName = "ESONJson"
@@ -48,7 +51,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $dll = Join-Path $outDir ($OutputName + ".dll")
 $src = Join-Path $root "eson_json.c"
 
-& cl /nologo /O2 /MT /LD /W3 /I"$root" "$src" /Fe:"$dll" /link /NOLOGO /MACHINE:X64 /SUBSYSTEM:WINDOWS
+& cl /nologo /O2 /MT /LD /W3 /I"$root" "$src" /Fe:"$dll" /link /NOLOGO /MACHINE:X64 /SUBSYSTEM:WINDOWS /Brepro
 if ($LASTEXITCODE -ne 0) { throw "cl failed with exit $LASTEXITCODE" }
 
 Write-Output ""
