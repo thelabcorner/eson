@@ -139,6 +139,12 @@ Illustrator 30.6.0:
 | `parse` cold, native gate | 19 us | 94 us | 2,784 us |
 | speedup | 14x | 14x | **17x** |
 
+> These 14-17x wins were measured against the earlier, slower JSX pre-scan.
+> The current regex pre-scan (~3.7 us/KB) closed the gap: on today's code
+> the gate is parity-speed at ~49 KB (gate ON ~82 ms vs OFF ~67 ms cold,
+> measured live 2026-08-08) - its value is the certified RFC-exact native
+> verdict, not raw throughput (see the ESPACK section below).
+
 The gate is certified before it is trusted:
 
 - **Enable-time self-certification** (`certified` in `capabilities().native`):
@@ -962,11 +968,21 @@ the ESON vendor semantics `JSON = ESON`, which satisfies the COM tool's ESON
 share-check). `ESON.useEspack()` is the idempotent opt-in form; the outcome
 is on `ESON.espack`.
 
-Measured (30.6.0, live): parse with the native gate ON ≈ 191 µs vs OFF
-≈ 179 µs at 48,976 chars — the current pre-scan is ~3.7 µs/KB, so the gate
-is parity-speed today (the historical 14-17× native win was against the old
-pre-scan); its value is the certified RFC-exact native verdict + single-file
-delivery. The esb64 btoa/atob acceleration (58-70×) is the big espack win.
+Measured (30.6.0, live): cold parse at ~49 KB — gate ON ~82 ms vs gate OFF
+~67 ms — parity-speed today (the gate replaces only the regex pre-scan,
+~3.7 µs/KB; sanitize + eval stay and dominate); its value is the certified
+RFC-exact native verdict + single-file delivery. The espack delivery
+overhead (measured, same host):
+
+| Operation | Cost |
+|---|---|
+| One-time accelerator extraction (per system) | ~13 ms |
+| Payload extraction (native `b64decodeToFile`) | **3-10 µs** |
+| Bundle load (skip-extract path) | ~1.2-1.9 ms |
+| esb64 lane acceleration (shared accel) | btoa 16 K: 18.6 ms → 317 µs (**58.5×**) · atob 48 K: 66.8 ms → 957 µs (**69.8×**) |
+
+The esb64 btoa/atob acceleration (58-70×) is the big espack win for base64
+workloads; the ESON gate's wins are certification and delivery.
 
 ### ESON core fix shipped with this integration
 
