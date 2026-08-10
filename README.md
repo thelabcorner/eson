@@ -305,6 +305,7 @@ ESON facade
 |---|---|---|
 | A script/plugin that needs strict `JSON.parse` / `JSON.stringify` | **Latest stable** | `vendor-eson.js` — drop-in vendor, installs the global |
 | A facade-only script (leave the global alone) | Latest stable | `ESON.jsx` — bannerless IIFE, defines `ESON` |
+| Self-extracting native-gate bundle (Windows x64) | Latest stable | `ESON.accel.jsx` — espack single-file bundle (ESONJson.dll payload + shared esb64 accelerator) |
 | High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` - 15.7 KB, parse/stringify only |
 | Node.js testing / tooling | Latest stable | `eson-core.esm.mjs` — ESM core (25 exports) |
 | Differential probes / verification | Latest stable | `json2-reference.jsx` — raw json2 reference lane |
@@ -737,6 +738,16 @@ Measured (30.6.0, live): cold parse at ~49 KB — gate ON ~82 ms vs gate OFF
 ~3.7 µs/KB; sanitize + eval stay and dominate); its value is the certified
 RFC-exact native verdict + single-file delivery. The espack delivery
 overhead (measured, same host):
+
+**Merge architecture (espack v0.3.0).** The build also emits two composition
+artifacts for hosts that bundle multiple espack consumers in one file (e.g.
+ArcFit): `dist/ESON.manifest.json` (schema v1, payload-only, byte-identical
+to `espack-build --manifest-out`) and `dist/ESON.facade.jsx` (loader-free
+facade + adapter, requires `ESPAK` on `$.global`). A composer merges the
+manifests with `espack-merge.mjs` into ONE loader and appends the facades.
+The adapter loads the payload **by name** (`ESPAK.load("ESONJson")`) — index
+0 is not a stable API under a merged bundle. The standalone `ESON.accel.jsx`
+is unchanged in composition.
 
 | Operation | Cost |
 |---|---|
