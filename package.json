@@ -1,6 +1,6 @@
 {
   "name": "eson",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "ESON — ExtendScript Object Notation: a strict JSON parser/stringify library for ExtendScript (ES3) engines",
   "type": "module",
   "main": "dist/eson-core.esm.mjs",

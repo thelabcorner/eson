@@ -298,7 +298,7 @@ ESON facade
 **How it works, in three steps:**
 
 1. Open the [Releases page](https://github.com/thelabcorner/eson/releases).
-2. Pick the **latest stable** tag (top of the list — today that is `v1.1.0`).
+2. Pick the **latest stable** tag (top of the list — today that is `v1.2.0`).
 3. Download the asset that matches your use case:
 
 | You are... | Take this release | And this asset |
