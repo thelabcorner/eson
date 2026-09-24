@@ -1,28 +1,28 @@
 /*
  * ESONJson.dll - ExtendScript ExternalObject case for the ESON prototype
- * (eson/), rebuilt on the VERIFIED ExternalObject prototype (canonical
- * SoSharedLibDefs ABI, measured live on Illustrator 30.6.0).
+ * (eson/), using pinned ESABI v0.3.0 as the ExternalObject ABI authority
+ * (Windows LONG32 behavior measured live on Illustrator 30.6.0).
  *
  * ABI dataset (Illustrator 30.6.0, live sessions 2026-08-04..07):
  *   - The first ESONJson DLL used the POC's reconstructed tags
- *     (kTypeString=1, kTypeInteger=4, kTypeScript=8), a (void*,void*,void*)
+ *     (ESABI_TYPE_STRING=1, ESABI_TYPE_INTEGER=4, ESABI_TYPE_SCRIPT=8), a (void*,void*,void*)
  *     export shape, `_a` signatures and a no-op ESFreeMem. Its string
  *     methods (stage/validateStaged/escapedBytes/validateText) failed to
  *     bind in BOTH live sessions; only ping/version/escapeStaged/nextByte
  *     bound.
  *   - The verified prototype rebuilt with the canonical ABI bound every
- *     method: documented `long fn(TaggedData*, long, TaggedData*)`
+ *     method: documented `long fn(esabi_value*, long, esabi_value*)`
  *     prototypes, `_s` signatures, malloc'd strings + real
- *     ESFreeMem(free), kTypeString=4 (verified to ~360 KB per direction),
- *     kTypeInteger=123, kTypeScript=125 (auto-eval verified live).
+ *     ESFreeMem(free), ESABI_TYPE_STRING=4 (verified to ~360 KB per direction),
+ *     ESABI_TYPE_INTEGER=123, ESABI_TYPE_SCRIPT=125 (auto-eval verified live).
  *     Failure tracked the DLL build, not the session.
  *   - Measured channel winners (same host): packBytes/unpackBytes
  *     (2-bytes-per-char packed channel) = 1.75x per-unit reads, 3.7x
  *     per-unit writes; whole-workload-native transforms = 4,800-11,900x.
- *     kTypeScript chunking loses at every chunk size - not used here.
+ *     ESABI_TYPE_SCRIPT chunking loses at every chunk size - not used here.
  *
  * This DLL therefore keeps the (correct, iso1-validated) C validator and
- * escaper, fixes the ABI to the canonical tags/prototypes/ownership, and
+ * escaper, consumes ESABI for tags/prototypes/ownership, and
  * adds the verified packed channel + whole-workload-native transforms.
  * `stagePacked`/`validatePacked` remain as the numeric-argument fallback
  * (string arguments are per-DLL-build: probe before depending on them).
@@ -30,7 +30,7 @@
  * Build:  powershell -File build.ps1 [-OutputName ESONJsonN]
  * Test:   probes/eson-benchmark.jsx (native.bindings) inside Illustrator.
  */
-#include "eson_abi.h"
+#include <esabi/esabi.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -55,48 +55,36 @@ static size_t g_in16_cap = 0;
 static long g_last_arg_tag = -1; /* ABI evidence: which tag the host used */
 
 /* -------------------------------------------------------------- helpers */
-static void clear_retval(TaggedData *retval) {
-    if (!retval) return;
-    retval->data.intval = 0;
-    retval->type = kTypeUndefined;
-    retval->filler = 0;
+static void clear_retval(esabi_value *retval) {
+    esabi_value_set_undefined(retval);
 }
 
-static void set_double(TaggedData *result, double value) {
-    if (!result) return;
-    result->data.fltval = value;
-    result->type = kTypeDouble;
-    result->filler = 0;
+static void set_double(esabi_value *result, double value) {
+    esabi_value_set_double(result, value);
 }
 
-static void set_integer(TaggedData *result, long value) {
-    if (!result) return;
-    result->data.intval = value;
-    result->type = kTypeInteger;
-    result->filler = 0;
+static void set_integer(esabi_value *result, long value) {
+    esabi_value_set_i32(result, (esabi_i32)value);
 }
 
-/* kTypeString (4): the returned buffer must be malloc'd - ExtendScript
+/* ESABI_TYPE_STRING (4): the returned buffer must be malloc'd - ExtendScript
  * frees it via ESFreeMem (this DLL's ESFreeMem = free). */
-static void set_string(TaggedData *result, char *value) {
-    if (!result) return;
-    result->data.string = value ? value : (char *)"";
-    result->type = kTypeString;
-    result->filler = 0;
+static void set_string(esabi_value *result, char *value) {
+    esabi_value_set_string(result, value ? value : (char *)"" );
 }
 
-static int string_arg(TaggedData *argv, long argc, long index,
+static int string_arg(esabi_value *argv, long argc, long index,
                       const char **value, long *tag) {
     if (!argv || index < 0 || index >= argc) return 0;
-    if (argv[index].type != kTypeString) return 0; /* _s signature cast */
+    if (argv[index].type != ESABI_TYPE_STRING) return 0; /* _s signature cast */
     if (tag) *tag = argv[index].type;
-    *value = argv[index].data.string ? argv[index].data.string : "";
+    *value = argv[index].payload.string_value ? argv[index].payload.string_value : "";
     return 1;
 }
 
-static long arg_as_long(TaggedData *a) {
-    if (a->type == kTypeDouble) return (long)a->data.fltval;
-    if (a->type == kTypeInteger || a->type == kTypeUInteger) return a->data.intval;
+static long arg_as_long(esabi_value *a) {
+    if (a->type == ESABI_TYPE_DOUBLE) return (long)a->payload.double_value;
+    if (a->type == ESABI_TYPE_INTEGER || a->type == ESABI_TYPE_UINTEGER) return a->payload.signed_value;
     return -1; /* invalid */
 }
 
@@ -659,7 +647,7 @@ static unsigned crc32_bytes(const unsigned char *p, size_t n) {
 /* ------------------------------------------------------------- exports */
 /* Mandatory entry points. ESInitialize returns the signature string
  * (malloc'd - freed via ESFreeMem like any returned string). */
-EO_EXPORT char *ESInitialize(TaggedData *argv, long argc) {
+ESABI_INITIALIZE_FUNCTION {
     (void)argv;
     (void)argc;
     return dup_string("ping_f,version_f,stage_s,stagedBytes_f,validateStaged_f,"
@@ -668,133 +656,133 @@ EO_EXPORT char *ESInitialize(TaggedData *argv, long argc) {
                       "hexEncode_s,crc32_s,stagePacked,validatePacked,evalJson");
 }
 
-EO_EXPORT long ESGetVersion(void) { return 1; }
+ESABI_VERSION_FUNCTION { return 1; }
 
-EO_EXPORT void ESFreeMem(void *p) { free(p); }
+ESABI_FREE_FUNCTION { free(pointer); }
 
-EO_EXPORT void ESTerminate(void) {
+ESABI_TERMINATE_FUNCTION {
     free(g_in); g_in = NULL; g_in_cap = 0; g_in_len = 0;
     free(g_out); g_out = NULL; g_out_cap = 0; g_out_len = 0; g_out_cursor = 0;
     free(g_in16); g_in16 = NULL; g_in16_cap = 0; g_in16_len = 0;
 }
 
-/* Direct methods: documented shape `long fn(TaggedData*, long, TaggedData*)`
- * returning kESErrOK (0) or a non-negative catchable code. Never return
+/* Direct methods use ESABI_DIRECT_FUNCTION(name), returning ESABI_OK (0)
+ * or a non-negative catchable code. Never return
  * negative codes (fatal, uncatchable). */
 
-EO_EXPORT long ping(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(ping) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, 42.0);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long version(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(version) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, 2.0); /* ABI-generation 2: canonical tags + long shape */
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long stage(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(stage) {
     const char *value = NULL;
     long tag = -1;
     size_t len;
     clear_retval(retval);
-    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    if (!string_arg(argv, argc, 0, &value, &tag)) return ESABI_ERR_BAD_ARGUMENTS;
     g_last_arg_tag = tag;
     len = strlen(value);
     if (len + 1 > g_in_cap || !g_in) {
         char *nb = (char *)realloc(g_in, len + 1);
-        if (!nb) return kESErrNoMemory;
+        if (!nb) return ESABI_ERR_OUT_OF_MEMORY;
         g_in = nb;
         g_in_cap = len + 1;
     }
     memcpy(g_in, value, len + 1);
     g_in_len = len;
     set_double(retval, (double)len);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long stagedBytes(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(stagedBytes) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, (double)g_in_len);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long lastArgTag(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(lastArgTag) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, (double)g_last_arg_tag);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long validateStaged(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(validateStaged) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, (double)validate_json(g_in ? g_in : "", g_in_len));
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long escapeStaged(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(escapeStaged) {
     (void)argv; (void)argc;
     clear_retval(retval);
     if (escape_json(g_in ? g_in : "", g_in_len) != 0) {
         set_double(retval, -1.0);
-        return kESErrNoMemory;
+        return ESABI_ERR_OUT_OF_MEMORY;
     }
     set_double(retval, (double)g_out_len);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long escapedBytes(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(escapedBytes) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, (double)g_out_len);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long nextByte(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(nextByte) {
     (void)argv; (void)argc;
     clear_retval(retval);
     if (!g_out || g_out_cursor >= g_out_len) {
         set_double(retval, -1.0);
-        return kESErrOK;
+        return ESABI_OK;
     }
     set_double(retval, (double)(unsigned char)g_out[g_out_cursor]);
     g_out_cursor++;
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-/* Single-call escape: string in, escaped string out (kTypeString=4,
+/* Single-call escape: string in, escaped string out (ESABI_TYPE_STRING=4,
  * malloc'd, freed by ESFreeMem). */
-EO_EXPORT long escapeDirect(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(escapeDirect) {
     const char *value = NULL;
     long tag = -1;
     size_t len;
     char *out;
     clear_retval(retval);
-    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    if (!string_arg(argv, argc, 0, &value, &tag)) return ESABI_ERR_BAD_ARGUMENTS;
     g_last_arg_tag = tag;
     len = strlen(value);
     if (len + 1 > g_in_cap || !g_in) {
         char *nb = (char *)realloc(g_in, len + 1);
-        if (!nb) return kESErrNoMemory;
+        if (!nb) return ESABI_ERR_OUT_OF_MEMORY;
         g_in = nb;
         g_in_cap = len + 1;
     }
     memcpy(g_in, value, len + 1);
     g_in_len = len;
-    if (escape_json(g_in, g_in_len) != 0) return kESErrNoMemory;
+    if (escape_json(g_in, g_in_len) != 0) return ESABI_ERR_OUT_OF_MEMORY;
     out = (char *)malloc(g_out_len + 1);
-    if (!out) return kESErrNoMemory;
+    if (!out) return ESABI_ERR_OUT_OF_MEMORY;
     memcpy(out, g_out, g_out_len + 1);
     set_string(retval, out);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long resetState(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(resetState) {
     (void)argv; (void)argc;
     clear_retval(retval);
     g_in_len = 0;
@@ -802,104 +790,104 @@ EO_EXPORT long resetState(TaggedData *argv, long argc, TaggedData *retval) {
     g_out_cursor = 0;
     g_last_arg_tag = -1;
     set_double(retval, 0.0);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
 /* Single-call strict JSON gate (the whole-workload-native replacement for
  * the JSX charCodeAt scanner): string in, verdict out (0 = valid). */
-EO_EXPORT long validateText(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(validateText) {
     const char *value = NULL;
     long tag = -1;
     clear_retval(retval);
     if (!string_arg(argv, argc, 0, &value, &tag)) {
         set_double(retval, -999.0); /* ABI evidence: arg did not arrive as string */
-        return kESErrOK;
+        return ESABI_OK;
     }
     g_last_arg_tag = tag;
     set_double(retval, (double)validate_json(value, strlen(value)));
-    return kESErrOK;
+    return ESABI_OK;
 }
 
 /* packBytes(s) -> packed 2-bytes-per-char string (the bulk charCodeAt
  * replacement; see pack_bytes comment for the surrogate-window caveat). */
-EO_EXPORT long packBytes(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(packBytes) {
     const char *value = NULL;
     long tag = -1;
     char *out = NULL;
     clear_retval(retval);
-    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    if (!string_arg(argv, argc, 0, &value, &tag)) return ESABI_ERR_BAD_ARGUMENTS;
     g_last_arg_tag = tag;
     if (pack_bytes((const unsigned char *)value, strlen(value), &out) != 0) {
-        return kESErrNoMemory;
+        return ESABI_ERR_OUT_OF_MEMORY;
     }
     set_string(retval, out);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long unpackBytes(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(unpackBytes) {
     const char *value = NULL;
     long tag = -1;
     char *out = NULL;
     clear_retval(retval);
-    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    if (!string_arg(argv, argc, 0, &value, &tag)) return ESABI_ERR_BAD_ARGUMENTS;
     g_last_arg_tag = tag;
     if (unpack_bytes(value, strlen(value), &out, NULL) != 0) {
-        return kESErrBadArgumentList; /* not valid packed data */
+        return ESABI_ERR_BAD_ARGUMENTS; /* not valid packed data */
     }
     set_string(retval, out);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long hexEncode(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(hexEncode) {
     const char *value = NULL;
     long tag = -1;
     char *out = NULL;
     clear_retval(retval);
-    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    if (!string_arg(argv, argc, 0, &value, &tag)) return ESABI_ERR_BAD_ARGUMENTS;
     g_last_arg_tag = tag;
-    if (hex_encode(value, strlen(value), &out) != 0) return kESErrNoMemory;
+    if (hex_encode(value, strlen(value), &out) != 0) return ESABI_ERR_OUT_OF_MEMORY;
     set_string(retval, out);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long crc32(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(crc32) {
     const char *value = NULL;
     long tag = -1;
     clear_retval(retval);
-    if (!string_arg(argv, argc, 0, &value, &tag)) return kESErrBadArgumentList;
+    if (!string_arg(argv, argc, 0, &value, &tag)) return ESABI_ERR_BAD_ARGUMENTS;
     g_last_arg_tag = tag;
     set_integer(retval, (long)crc32_bytes((const unsigned char *)value, strlen(value)));
-    return kESErrOK;
+    return ESABI_OK;
 }
 
 /* ---- packed numeric transport (fallback when string args do not bind) --- */
 /* stagePacked(len, p0, p1, ...): each double carries 3 UTF-16 code units in
  * its low 48 bits (integers are exact through 53 bits). No declared
  * signature (variadic numeric arguments are the reliably-bound path). */
-EO_EXPORT long stagePacked(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(stagePacked) {
     double lenD;
     size_t len;
     size_t i;
     size_t filled = 0;
     clear_retval(retval);
-    if (argc < 1) return kESErrBadArgumentList;
-    lenD = argv[0].data.fltval;
+    if (argc < 1) return ESABI_ERR_BAD_ARGUMENTS;
+    lenD = argv[0].payload.double_value;
     len = (size_t)lenD;
     if (len == 0 || len > 0x400000) {
         set_double(retval, -2.0);
-        return kESErrOK;
+        return ESABI_OK;
     }
     if (len > g_in16_cap || !g_in16) {
         uint16_t *nb = (uint16_t *)realloc(g_in16, len * sizeof(uint16_t));
         if (!nb) {
             set_double(retval, -3.0);
-            return kESErrOK;
+            return ESABI_OK;
         }
         g_in16 = nb;
         g_in16_cap = len;
     }
     for (i = 1; i < (size_t)argc && filled < len; i++) {
-        double v = argv[i].data.fltval;
+        double v = argv[i].payload.double_value;
         uint64_t uv = (uint64_t)v;
         g_in16[filled++] = (uint16_t)(uv & 0xFFFFu);
         if (filled < len) g_in16[filled++] = (uint16_t)((uv >> 16) & 0xFFFFu);
@@ -907,39 +895,37 @@ EO_EXPORT long stagePacked(TaggedData *argv, long argc, TaggedData *retval) {
     }
     g_in16_len = len;
     set_double(retval, (double)filled);
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-EO_EXPORT long validatePacked(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(validatePacked) {
     (void)argv; (void)argc;
     clear_retval(retval);
     set_double(retval, (double)validate_json16(g_in16 ? g_in16 : NULL, g_in16_len));
-    return kESErrOK;
+    return ESABI_OK;
 }
 
-/* kTypeScript (125) return: validates the packed text, then returns it as a
- * Script TaggedData - the host evaluates it and returns the result (the
+/* ESABI_TYPE_SCRIPT (125) return: validates the packed text, then returns it as an
+ * ESABI script value - the host evaluates it and returns the result (the
  * verified 2026-08-07 mechanism; the old reconstruction tag 8 never fired).
  * Security boundary preserved: only validate_json16-clean text is ever
  * returned as a script. Cost is superlinear in the host eval - keep payloads
  * small (~2-4 K units); do NOT build bulk-read pipelines on this. */
-EO_EXPORT long evalJson(TaggedData *argv, long argc, TaggedData *retval) {
+ESABI_DIRECT_FUNCTION(evalJson) {
     char *out;
     size_t cap;
     clear_retval(retval);
     (void)argv; (void)argc;
     if (!g_in16 || validate_json16(g_in16, g_in16_len) != 0) {
-        return kESErrOK; /* undefined */
+        return ESABI_OK; /* undefined */
     }
     cap = g_in16_len * 3 + 1; /* UTF-16 -> UTF-8 worst case */
     out = (char *)malloc(cap);
-    if (!out) return kESErrNoMemory;
+    if (!out) return ESABI_ERR_OUT_OF_MEMORY;
     if (utf16_to_utf8(g_in16, g_in16_len, out, cap) != 0) {
         free(out);
-        return kESErrOK; /* undefined */
+        return ESABI_OK; /* undefined */
     }
-    retval->data.string = out;
-    retval->type = kTypeScript;
-    retval->filler = 0;
-    return kESErrOK;
+    esabi_value_set_script(retval, out);
+    return ESABI_OK;
 }

@@ -37,7 +37,12 @@ function runTool(args, timeoutMs) {
   return JSON.parse(out.trim());
 }
 function evalFile(path) {
-  var env = runTool(['eval', '--file', path.replace(/\\/g, '/')]);
+  // Load through $.evalFile (the real consumer path). The tool's --file mode
+  // runs a lexical ES3 pre-flight that misreads the espack/ESON bundle text
+  // (regex literals with quotes / one-line normalized output) as unbalanced;
+  // --code with the same $.evalFile call is the actual engine path.
+  var p = path.replace(/\\/g, '/');
+  var env = runTool(['eval', '--code', "return (function () { $.evalFile(new File('" + p + "')); return true; }());"]);
   if (!env.ok) throw new Error('eval failed: ' + JSON.stringify(env).slice(0, 1500));
   return env.result;
 }

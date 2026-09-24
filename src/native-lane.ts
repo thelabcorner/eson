@@ -82,8 +82,10 @@ var VALID_CASES: string[] = [
   // astral char inside a string: VALID JSON, but the ExternalObject string
   // channel cannot transport surrogate pairs (they are dropped at the
   // boundary, measured live) - the gate defers this class to the pre-scan,
-  // which accepts it correctly.
-  '["\uDBFF\uDFFF"]'
+  // which accepts it correctly. Built via fromCharCode: a literal astral
+  // escape is re-emitted as an ES6 `\u{...}` by the compatibility
+  // re-emitter's ascii_only pass, which the ES3 grammar gate rejects.
+  '["' + String.fromCharCode(0xDBFF, 0xDFFF) + '"]'
 ];
 
 var INVALID_CASES: string[] = [

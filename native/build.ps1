@@ -13,6 +13,10 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $outDir = Join-Path $root "build"
+$esabiInclude = Join-Path $root "..\deps\esabi\include"
+if (-not (Test-Path (Join-Path $esabiInclude "esabi\esabi.h"))) {
+    throw "ESABI dependency missing. Run: git submodule update --init --recursive"
+}
 
 function Find-VsDevCmd {
     $candidates = @(
@@ -51,7 +55,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $dll = Join-Path $outDir ($OutputName + ".dll")
 $src = Join-Path $root "eson_json.c"
 
-& cl /nologo /O2 /MT /LD /W3 /I"$root" "$src" /Fe:"$dll" /link /NOLOGO /MACHINE:X64 /SUBSYSTEM:WINDOWS /Brepro
+& cl /nologo /O2 /MT /LD /W3 /I"$root" /I"$esabiInclude" "$src" /Fe:"$dll" /link /NOLOGO /MACHINE:X64 /SUBSYSTEM:WINDOWS /Brepro
 if ($LASTEXITCODE -ne 0) { throw "cl failed with exit $LASTEXITCODE" }
 
 Write-Output ""

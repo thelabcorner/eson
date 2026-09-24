@@ -131,6 +131,20 @@ rw('rawNulMid', '"a' + '\u0000' + 'b"', '"a\\u0000b"');
 rw('rawTab', '"a\tb"', '"a\\tb"');
 rw('rawLineSep', '"a\u2028b"', '"a\\u2028b"');
 
+// pair-aware surrogate escaping (well-formed JSON.stringify, ES2019): lone
+// high/low surrogates escape as \udxxx text; a valid pair stays raw. Values
+// are runtime-constructed so no raw unpaired surrogate crosses a file or
+// string boundary.
+var loneHigh = String.fromCharCode(0xD800);
+var loneLow = String.fromCharCode(0xDC00);
+var surrogatePair = String.fromCharCode(0xD83D, 0xDE00);
+rw('loneHighRaw', '"' + loneHigh + '"', '"\\ud800"');
+rw('loneLowRaw', '"' + loneLow + '"', '"\\udc00"');
+rw('loneHighEscaped', '"\\ud800"', '"\\ud800"');
+rw('loneLowEscaped', '"\\udc00"', '"\\udc00"');
+rw('surrogatePairRaw', '"' + surrogatePair + '"', '"' + surrogatePair + '"');
+rw('surrogatePairEscaped', '"\\ud83d\\ude00"', '"' + surrogatePair + '"');
+
 // --------------------------------------------------- 2. stringify differential
 
 var values = makeValues();

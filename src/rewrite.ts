@@ -27,10 +27,12 @@
 //   anything the fast path refuses (unicode keys, exotic forms).
 //
 // String escapes are decoded (JS forms: \x, \v, octal, \u) and re-encoded with
-// JSON2's exact escaping policy (rx_escapable + meta), which makes the output
-// byte-for-byte identical to JSON2's quote().
+// the patched JSON2 escaping policy (pair-aware rx_escapable + meta): valid
+// surrogate pairs stay raw and lone high/low surrogates escape as \udxxx
+// (well-formed JSON.stringify, ES2019) - byte-for-byte identical to the
+// vendored json2's quote().
 
-var rx_escapable = /[\\"\u0000-\u001f\u007f-\u009f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g;
+var rx_escapable = /[\\"\u0000-\u001f\u007f-\u009f\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]|[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udbff]|[\udc00-\udfff]/g;
 
 var meta: any = {
   '\b': '\\b',
@@ -62,6 +64,10 @@ function emitString(s: string): string {
   rx_escapable.lastIndex = 0;
   if (!rx_escapable.test(s)) return '"' + s + '"';
   return '"' + s.replace(rx_escapable, function (a: string): string {
+    // A two-char match is a valid surrogate pair: the well-formed
+    // JSON.stringify (ES2019) leaves pairs raw and escapes only lone
+    // surrogates (same rule as the patched vendor json2 quote()).
+    if (a.length === 2) return a;
     var m = meta[a];
     return typeof m === 'string' ? m : '\\u' + ('0000' + a.charCodeAt(0).toString(16)).slice(-4);
   }) + '"';

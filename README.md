@@ -11,7 +11,7 @@
 [![Differential: V8 native](https://img.shields.io/badge/differential-vs%20V8%20native%20330k%2B%20iters-purple)](https://github.com/nst/JSONTestSuite)
 [![Adobe: Creative Suite](https://img.shields.io/badge/Adobe%20-Creative%20Suite-red?logo=adobe&logoColor=white)](https://extendscript.docsforadobe.dev/)
 [![Engine](https://img.shields.io/badge/ExtendScript-ES3-green)](#compatibility)
-[![Size](https://img.shields.io/badge/runtime-15.7%20KB-orange)](#installation)
+[![Size](https://img.shields.io/badge/runtime-8.1%20KB-orange)](#installation)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL%203.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 </div>
@@ -137,8 +137,8 @@ ESON is the strict answer: a **drop-in replacement for `JSON.parse` / `JSON.stri
 - **Eval-gated by default:** the strict `parse()` lane is pre-scan + sanitize + `eval` with a `SyntaxError` catch; every trusted-only raw-eval entry point is named `*Trusted` / `*Checked` explicitly; the eval-free `decodeSourceChecked` lane is documented in the API reference.
 - **Fast in the ES3 engine:** ~1.6× faster cold parse than json2 at 43 KB, ~385× faster on repeat parses via an 8-entry verdict memo (47.7 ms cold → 124 µs).
 - **Preserves more than JSON when you need it:** the trusted lane (`encodeSource` / `decodeSourceTrusted`) round-trips `undefined`, `NaN`, `Infinity`, functions, dates and sparse arrays in ~26 µs.
-- **Certified, not claimed:** JSONTestSuite 95/95 + 188/188 + 35/35 with zero V8 divergence; 623 Node assertions; 36/36 byte-equal differential vs the JSON2 reference in the live engine.
-- **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 15.7 KB; the full `ESON.jsx` is 59.3 KB (the +6.4 KB is the opt-in native gate module - pruned from the runtime build by tree-shaking).
+- **Certified, not claimed:** JSONTestSuite 95/95 + 188/188 + 35/35 with zero V8 divergence; 630 Node assertions + 37 native-lane; 129/129 oracle/gate parity checks; 36/36 byte-equal differential vs the JSON2 reference with a live probe report.
+- **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 8.1 KB; the full `ESON.jsx` is 38.3 KB (the difference is the trusted codec, fast lane, capability probing and the opt-in native gate module - all pruned from the runtime build by tree-shaking).
 
 ---
 
@@ -150,16 +150,16 @@ stringify; the difference is everything else.
 | | **Runtime build** | **Full build** |
 |---|---|---|
 | Files | `vendor-eson-runtime.js`¹ | `vendor-eson.js`, `ESON.jsx` |
-| Size | 15.7 KB | 59.3 KB (ESON.jsx) / 59.4 KB (vendor-eson.js) |
+| Size | 8.1 KB | 38.3 KB (ESON.jsx) / 38.4 KB (vendor-eson.js) |
 | API | `parse`, `stringify` only | full facade: `parse`, `stringify`, `parseTrusted`, `stringifyFast`, `encodeSource` / `decodeSourceTrusted`, `decodeSourceChecked`, `enableNativeGate` / `disableNativeGate`, `capabilities`, `install`, `loadJson2Api` (provisioning helper), `benchmark` |
 | Installs global `JSON` | yes (vendor variant) | yes (vendor variant) |
 | Best for | high-frequency automation, per-eval injection, anything that only needs strict `JSON.parse` / `JSON.stringify` | plugins and long-lived scripts that also need the trusted codec, certified fast lane, the ExternalObject-accelerated gate, capability probing, or benchmark tooling |
 
-¹ `ESON-runtime.jsx` is a build intermediate (bare esbuild bundle: no `ESON_JSON2` wrapper, no ES3 shim, no install footer), not a standalone-loadable artifact; the loadable runtime artifact is `vendor-eson-runtime.js` only. The runtime build contains zero ExternalObject code (the `parseJson` gate hook is inert there - the parameter is never passed).
+¹ `ESON-runtime.jsx` is a build intermediate (no install footer; the private `ESON_JSON2` backend is injected as an ESTC prelude), not a standalone-loadable artifact; the loadable runtime artifact is `vendor-eson-runtime.js` only. The runtime build contains zero ExternalObject code (the `parseJson` gate hook is inert there - the parameter is never passed).
 
 **Rule of thumb:** if your script only ever calls `JSON.parse` and
 `JSON.stringify` (or `ESON.parse` / `ESON.stringify`), use the **runtime
-build**. It is 1/3 the size and evals faster. Reach for the **full build**
+build**. It is roughly 1/5 the size and evals faster. Reach for the **full build**
 only when you need `stringifyFast`, the trusted source codec
 (`encodeSource` / `decodeSourceTrusted`), `decodeSourceChecked`,
 `capabilities()`, or `benchmark()`.
@@ -353,7 +353,7 @@ ESON facade
 **How it works, in three steps:**
 
 1. Open the [Releases page](https://github.com/thelabcorner/eson/releases).
-2. Pick the **latest stable** tag (top of the list — today that is `v1.2.0`).
+2. Pick the **latest stable** tag (top of the list — today that is `v1.2.2`).
 3. Download the asset that matches your use case:
 
 | You are... | Take this release | And this asset |
@@ -361,14 +361,14 @@ ESON facade
 | A script/plugin that needs strict `JSON.parse` / `JSON.stringify` | **Latest stable** | `vendor-eson.js` — drop-in vendor, installs the global |
 | A facade-only script (leave the global alone) | Latest stable | `ESON.jsx` — bannerless IIFE, defines `ESON` |
 | Self-extracting native-gate bundle (Windows x64) | Latest stable | `ESON.accel.jsx` — espack single-file bundle (ESONJson.dll payload + shared esb64 accelerator) |
-| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` - 15.7 KB, parse/stringify only |
+| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` - 8.1 KB, parse/stringify only |
 | Node.js testing / tooling | Latest stable | `eson-core.esm.mjs` — ESM core (25 exports) |
 | Differential probes / verification | Latest stable | `json2-reference.jsx` — raw json2 reference lane |
 | A fix that isn't released yet | Pre-release / `master` | Build from source: `npm run build` |
 
 > **Rule of thumb: start with the latest stable tag.** Every release asset is
 > produced by `npm run build` from the exact tagged commit, and no release is
-> tagged before it passes the full gate: 623 Node assertions, JSONTestSuite
+> tagged before it passes the full gate: 630 Node assertions (+37 native-lane), JSONTestSuite
 > 95/95 + 188/188 + 35/35, and 330,000+ differential fuzz iterations vs V8.
 
 > **Staying current:** releases follow [SemVer](https://semver.org/)
@@ -687,10 +687,10 @@ if (caps.sourceProfile === "none") { /* encodeSource will throw */ }
 | Check | Command | Result |
 |---|---|---|
 | TypeScript strict | `npm run typecheck` | clean |
-| Node assertions + differential tests | `npm test` | 623 assertions |
+| Node assertions + differential tests | `npm test` | 630 + 37 native-lane assertions |
 | Official JSONTestSuite corpus (must-accept / must-reject / implementation-defined) | `node tests/json-suite.mjs` | 95/95 `y_`, 188/188 `n_`, 35/35 `i_`, zero V8 divergence |
 | Deterministic differential fuzz vs V8 native `JSON.parse` | `node tests/fuzz.mjs 100000 0x..` | 330,000+ iterations across four seeds, zero divergences |
-| Live engine parity vs the JSON2 reference (Illustrator 30.6.0) | `npm run live-verify` | 36/36 byte-equal |
+| Live engine parity vs the JSON2 reference (Illustrator 30.6.0) | `npm run live-verify` | 129/129 oracle/gate parity checks (36/36 byte-equal with a live probe report) |
 | Native gate certification (per DLL build, in Illustrator) | `python ILLUSTRATOR_COM_TOOL.py eval --file probes/eson-corpus-parity.jsx` | y_ 95/95, n_ 184/184, i_ identical |
 
 The differential oracle is V8's native `JSON.parse`; engine parity is verified by running the identical bundled core inside real Illustrator via the COM tool.
@@ -895,36 +895,36 @@ tags `kTypeString=1 / kTypeInteger=4 / kTypeScript=8`, `_a` signatures, no-op
   DLL is unloaded or the session ends. Use lettered DLL file names per
   iteration (ESONJsonP, T, U, ...) and unload/terminate instances.
 
-**Round 2 (current): the canonical ABI, verified 2026-08-07.** Rebuilt on
-the ArcFitEso prototype — every one of its methods bound and ran on the same
-host, and the ESON rebuild (`version` now reports 2) follows it exactly:
+**Round 2 (current ABI behavior): verified 2026-08-07 and now implemented through [ESABI](https://github.com/thelabcorner/esabi) v0.3.0.** The original ArcFitEso/ESON probes established the host behavior; production ESON now consumes the shared ESABI definition rather than maintaining its own ABI header:
 
-- **Tags are the canonical SoSharedLibDefs.h values, not the reconstruction:**
-  `kTypeString=4` (verified end-to-end, ~360 KB per direction),
-  `kTypeInteger=123`, `kTypeUInteger=124`, **`kTypeScript=125`** (auto-eval
-  verified live: the host evaluates the returned script and returns the
-  value — the old claim "did NOT fire / tag 8 unverified" is resolved; 8
-  was simply the wrong value).
-- **Documented `long fn(TaggedData* argv, long argc, TaggedData* retval)`
-  prototypes** (not `(void*,void*,void*)`), `_s` signatures on string
-  methods, **malloc'd returns + real `ESFreeMem(free)`** (mirrors
-  AdobeXMPScript's decompiled contract), non-negative error codes only.
+- **Production tags come from ESABI v0.3.0, not the retired reconstruction:**
+  `ESABI_TYPE_STRING=4` (verified end-to-end, ~360 KB per direction),
+  `ESABI_TYPE_INTEGER=123`, `ESABI_TYPE_UINTEGER=124`, and
+  **`ESABI_TYPE_SCRIPT=125`**. Auto-eval was verified live: the host evaluates
+  the returned script and returns the value. The old "tag 8" claim was simply
+  based on the wrong reconstructed value.
+- **Business methods use `ESABI_DIRECT_FUNCTION(name)`** rather than private
+  function prototypes or `(void*,void*,void*)` shims. String methods use
+  `_s` signatures; returned buffers are malloc'd and released through the
+  matching `ESFreeMem(free)`; business methods return only non-negative
+  catchable status codes.
 - **Measured channel tiers** (ArcFitEso dataset, same host/version): whole-
   workload-native transforms (validate/escape/base64/hex) are 4,800-11,900×
   and remove the engine wedge; the packed 2-bytes-per-char channel
-  (`packBytes`/`unpackBytes`) is 1.75× reads / 3.7× writes; **kTypeScript
-  bulk-array chunking loses at every chunk size (dead end)**. Boundary cost
+  (`packBytes`/`unpackBytes`) is 1.75× reads / 3.7× writes;
+  **`ESABI_TYPE_SCRIPT` bulk-array chunking loses at every chunk size
+  (dead end)**. Boundary cost
   is ~7 µs/KB, near-linear — MB-scale strings are safe.
 - **Channel rules:** NUL truncates the string channel (payloads with U+0000
   are cut); packed values 0xD800-0xDFFF cannot round-trip (surrogate
   window — ASCII/Latin-1 safe, arbitrary bytes travel as hex); signature
-  codes cast argument types (`_d` → `kTypeInteger`, accept the whole numeric
-  family).
+  codes cast argument types (`_d` → `ESABI_TYPE_INTEGER`). Methods that
+  intentionally accept multiple numeric representations validate that explicitly.
 - **JSON as the ExternalObject transport** (via this library):
   ESON.stringify → native `validateText` (one crossing, C validator) →
   ESON.parse, or the packed fallback. The native validator rejects `01` and
   executable payloads before they can run. The packed evalJson auto-eval
-  channel (kTypeScript 125) round-trips array/scalar/string payloads only:
+  channel (`ESABI_TYPE_SCRIPT` 125) round-trips array/scalar/string payloads only:
   the host evaluates the validated text as a statement, so JSON object
   literals (`{"a":1}`) are a block-label parse error and the C validator
   rejects parenthesized text - object payloads use the string channel. The
@@ -979,9 +979,10 @@ Yes, `\u2028`/`\u2029` are sanitized, lone surrogates are escaped while valid pa
 ## Development
 
 ```
+git submodule update --init --recursive   # pins ESABI v0.3.0 for native ABI
 npm install            # devDeps: esbuild, typescript
 npm run typecheck      # tsc --noEmit (strict)
-npm test               # 623 Node assertions + differential tests
+npm test               # 630 Node assertions + 37 native-lane + differential tests
 npm run build          # dist/ESON.jsx + vendor-eson.js + vendor-eson-runtime.js
                        # + ESON-runtime.jsx + json2-reference.jsx + eson-core.esm.mjs
 npm run benchmark      # Node-side benchmark pipeline
@@ -1004,7 +1005,8 @@ eson/
   tests/          Node harnesses (custom, no framework)
   probes/         live ExtendScript probes (capability, benchmark, transport)
   examples/       runnable ExtendScript examples (see "Runnable examples")
-  native/         eson_json.c + eson_abi.h + build.ps1 (ExternalObject DLL)
+  native/         eson_json.c + build.ps1 (ExternalObject DLL)
+  deps/esabi/     pinned ESABI v0.3.0; sole ExternalObject ABI authority
   dist/           generated bundles (gitignored; produced by npm run build)
 ```
 
