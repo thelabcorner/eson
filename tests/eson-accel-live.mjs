@@ -5,42 +5,35 @@
 //   - verdict parity: gate-ON vs gate-OFF parse verdicts are identical on a
 //     strict corpus (valid + invalid + security shapes)
 //   - timing: parse with the gate ON vs OFF (median of 3)
-// Requires the COM tool + a COM-reachable automation instance.
-import { execFileSync } from 'node:child_process';
+// Requires COM Tool V2 + a COM-reachable automation instance.
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createLegacyComToolV2Runner } from '../../extendscript-toolchain/src/comtool-v2-compat.mjs';
 
 var ROOT = dirname(fileURLToPath(import.meta.url));
 var argBundle = null;
 var ai = process.argv.indexOf('--bundle');
 if (ai >= 0 && process.argv[ai + 1]) argBundle = process.argv[ai + 1];
 var ACCEL = argBundle || join(ROOT, '..', 'dist', 'ESON.accel.jsx');
-var TOOL = process.env.ILLUSTRATOR_COM_TOOL || 'C:/Program Files/Adobe/Adobe Illustrator 2026/Presets/en_US/Scripts/agent-skills/illustrator-com-automation-skill/comtool/ILLUSTRATOR_COM_TOOL.py';
+var COM = createLegacyComToolV2Runner();
+process.on('exit', function () { try { COM.close(); } catch (ignore) {} });
 
 if (!existsSync(ACCEL)) {
   console.error('accel-live: build first (npm run build:accel) - ' + ACCEL + ' missing');
   process.exit(1);
 }
-if (!existsSync(TOOL)) {
-  console.error('accel-live: COM tool not found at ' + TOOL);
-  process.exit(1);
-}
-
 var failures = 0;
 function check(name, cond, detail) {
   if (cond) console.log('ok   ' + name);
   else { failures++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
 function runTool(args, timeoutMs) {
-  var out = execFileSync('python', [TOOL].concat(args), { encoding: 'utf8', timeout: timeoutMs || 180000 });
-  return JSON.parse(out.trim());
+  return COM.run(args, { timeoutMs: timeoutMs || 180000 });
 }
 function evalFile(path) {
-  // Load through $.evalFile (the real consumer path). The tool's --file mode
-  // runs a lexical ES3 pre-flight that misreads the espack/ESON bundle text
-  // (regex literals with quotes / one-line normalized output) as unbalanced;
-  // --code with the same $.evalFile call is the actual engine path.
+  // Load through $.evalFile inside one V2 code turn: this is the real consumer
+  // path and keeps bundle load + subsequent state inspection in one engine.
   var p = path.replace(/\\/g, '/');
   var env = runTool(['eval', '--code', "return (function () { $.evalFile(new File('" + p + "')); return true; }());"]);
   if (!env.ok) throw new Error('eval failed: ' + JSON.stringify(env).slice(0, 1500));

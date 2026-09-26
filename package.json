@@ -10,6 +10,8 @@
     "build:accel:strict": "node eson-build.mjs --accel --require-accel",
     "test": "node tests/eson-test.mjs && node tests/native-lane.mjs",
     "test:vendor": "node tests/vendor-verify.mjs",
+    "vendor-sync": "node eson-vendor-sync.mjs",
+    "vendor-sync-check": "node eson-vendor-sync.mjs --check",
     "test:poly": "node tests/poly.mjs",
     "json-suite": "node tests/json-suite.mjs",
     "fuzz": "node tests/fuzz.mjs 100000",
@@ -22,6 +24,7 @@
     "live-artifacts": "node tests/eson-artifacts-live.mjs",
     "accel-live": "node tests/eson-accel-live.mjs",
     "release:gate": "npm run verify && npm run fuzz && npm run build:accel:strict && npm run estc:check && npm run estc:live && npm run live-verify && npm run live-artifacts && npm run accel-live",
+    "release:integration": "npm run vendor-sync && npm run vendor-sync-check",
     "prepublishOnly": "npm run release:gate",
     "native-build": "powershell -ExecutionPolicy Bypass -File native/build.ps1"
   },

@@ -14,9 +14,8 @@ export default {
   host: 'illustrator',
   hostTypes: 'Illustrator/2022',
   additionalTypes: ['./src/globals.d.ts', './src/spidermonkey.d.ts'],
-  entry: 'src/index.ts',
+  entry: 'src/extendscript-entry.ts',
   outfile: 'dist/vendor-eson.js',
-  globalName: 'ESON',
   target: 'illustrator',
   requireTarget: false,
   sourceLint: true,
@@ -26,7 +25,10 @@ export default {
   compatibilityShims: [],
   allowedMissingBuiltins: [],
   allowedGlobalPatches: [],
-  prelude: [{ code: buildJson2Prelude(ROOT) }],
+  prelude: [
+    { code: 'var ESON;' },
+    { code: buildJson2Prelude(ROOT) }
+  ],
   footer: [{ file: 'tooling/estc-vendor-footer.js' }],
   allowJson: true,
   allowIncludes: false,

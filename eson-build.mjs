@@ -64,6 +64,27 @@ function estcBuild(config) {
   });
 }
 
+function assertNoDescriptorBackedModuleHelpers(file) {
+  var text = readFileSync(file, 'utf8');
+  var forbidden = [
+    '__toCommonJS',
+    '__copyProps',
+    '__export',
+    'ESTC: Object.defineProperty is required by the generated esbuild module helper',
+    'ESTC: Object.getOwnPropertyDescriptor is required by the generated esbuild module helper',
+    'ESTC: Object.getOwnPropertyNames is required by the generated esbuild module helper'
+  ];
+  var found = forbidden.filter(function (needle) {
+    return text.indexOf(needle) !== -1;
+  });
+  if (found.length) {
+    throw new Error(
+      'eson-build: ExtendScript artifact still depends on descriptor-backed ' +
+      'esbuild module helpers: ' + file + ' (' + found.join(', ') + ')'
+    );
+  }
+}
+
 if (!existsSync(ESTC)) {
   throw new Error('eson-build: shared ExtendScript toolchain not found at ' + ESTC);
 }
@@ -81,6 +102,24 @@ estcBuild('./extendscript.estc.config.mjs');
 estcBuild('./extendscript.vendor.estc.config.mjs');
 estcBuild('./extendscript.runtime.estc.config.mjs');
 estcBuild('./extendscript.runtime-vendor.estc.config.mjs');
+
+// ExtendScript does not provide the ES5 descriptor APIs used by esbuild's
+// module-export helpers. The distribution entries are intentionally
+// side-effect-only, so these helpers must never reappear in the four standard
+// artifacts.
+[
+  'ESON.jsx',
+  'vendor-eson.js',
+  'ESON-runtime.jsx',
+  'vendor-eson-runtime.js'
+].forEach(function (name) {
+  assertNoDescriptorBackedModuleHelpers(join(DIST, name));
+});
+
+// The Illustrator COM tool consumes ESON under historical json2 vendor
+// filenames, but cross-repo vendoring is intentionally NOT an ordinary build
+// side effect. Run `node eson-vendor-sync.mjs` explicitly after validation;
+// its --check mode enforces byte identity for both core and accel artifacts.
 
 // 3. Reference artifact: the FULL raw json2 standalone (var JSON2) for the
 //    probes' json2-parse differential lanes. Not a release artifact and not
@@ -221,15 +260,8 @@ function buildAccel() {
   var accelOut = bundleText + '\n' + facadeText + '\n' + ACCELERATOR +
     '// ESON.accel.jsx - self-extracting single-file bundle (espack 1+n + ESON + native gate)\n';
   writeFileSync(join(DIST, 'ESON.accel.jsx'), accelOut);
-  // Vendor copy for the COM tool (its session bootstrap evals this bundle so
-  // the wrapper's ESON share-check resolves the accelerated facade).
-  var skillVendor = join(ROOT, '..', 'agent-skills', 'illustrator-com-automation-skill', 'vendor');
-  if (existsSync(skillVendor)) {
-    writeFileSync(join(skillVendor, 'ESON.accel.jsx'), accelOut);
-    console.log('[eson-build] vendored ESON.accel.jsx -> ' + join(skillVendor, 'ESON.accel.jsx'));
-  }
   console.log('[eson-build] wrote ' + join(DIST, 'ESON.accel.jsx') + ' (' + accelOut.length + ' bytes)');
-  minifyAccel(accelOut, skillVendor);
+  minifyAccel(accelOut);
 }
 
 // Minify the accelerated bundle via the adobe-extendscript-minification
@@ -237,7 +269,7 @@ function buildAccel() {
 // restore + node --check). The espack banner (leading block comment) is
 // extracted BEFORE minification and restored after - the conservative
 // config strips comments, and the banner identifies the generated artifact.
-function minifyAccel(accelOut, skillVendor) {
+function minifyAccel(accelOut) {
   var skillDir = join(ROOT, '..', 'agent-skills', 'adobe-extendscript-minification');
   var minifyScript = join(skillDir, 'scripts', 'minify-jsx.py');
   var minifyConfig = join(skillDir, 'configs', 'conservative.json');
@@ -260,10 +292,6 @@ function minifyAccel(accelOut, skillVendor) {
   var minOut = (banner ? banner + '\n' : '') + minBody;
   var minFinal = join(DIST, 'ESON.accel.min.jsx');
   writeFileSync(minFinal, minOut, 'utf8');
-  if (skillVendor && existsSync(skillVendor)) {
-    writeFileSync(join(skillVendor, 'ESON.accel.min.jsx'), minOut);
-    console.log('[eson-build] vendored ESON.accel.min.jsx -> ' + join(skillVendor, 'ESON.accel.min.jsx'));
-  }
   console.log('[eson-build] wrote ' + minFinal + ' (' + minOut.length + ' bytes, banner preserved)');
 }
 

@@ -6,19 +6,19 @@
 //   dist/ESON-runtime.jsx    - runtime facade; parse/stringify only; no install
 //   dist/vendor-eson-runtime.js - runtime + install footer
 //
-// Each artifact is loaded and probed inside ONE eval call ($.evalFile through
-// --code): the COM tool's session bootstrap re-installs the accelerated ESON
-// facade between separate eval invocations, so cross-call identity checks
-// would observe the tool's bootstrap rather than the artifact. The accelerated
-// bundle (ESON.accel.jsx) has its own harness: tests/eson-accel-live.mjs.
-import { execFileSync } from 'node:child_process';
+// Each artifact is loaded and probed inside ONE V2 eval call ($.evalFile
+// through --code), so before/after identity checks are atomic within one
+// persistent engine turn. The accelerated bundle has its own harness:
+// tests/eson-accel-live.mjs.
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createLegacyComToolV2Runner } from '../../extendscript-toolchain/src/comtool-v2-compat.mjs';
 
 var ROOT = dirname(fileURLToPath(import.meta.url));
 var DIST = join(ROOT, '..', 'dist');
-var TOOL = process.env.ILLUSTRATOR_COM_TOOL || 'C:/Program Files/Adobe/Adobe Illustrator 2026/Presets/en_US/Scripts/agent-skills/illustrator-com-automation-skill/comtool/ILLUSTRATOR_COM_TOOL.py';
+var COM = createLegacyComToolV2Runner();
+process.on('exit', function () { try { COM.close(); } catch (ignore) {} });
 
 var files = {
   standalone: join(DIST, 'ESON.jsx'),
@@ -33,19 +33,13 @@ for (var key in files) {
     process.exit(1);
   }
 }
-if (!existsSync(TOOL)) {
-  console.error('artifacts-live: COM tool not found at ' + TOOL);
-  process.exit(1);
-}
-
 var failures = 0;
 function check(name, cond, detail) {
   if (cond) console.log('ok   ' + name);
   else { failures++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
 function runTool(args, timeoutMs) {
-  var out = execFileSync('python', [TOOL].concat(args), { encoding: 'utf8', timeout: timeoutMs || 180000 });
-  return JSON.parse(out.trim());
+  return COM.run(args, { timeoutMs: timeoutMs || 180000 });
 }
 function evalCode(code) {
   var env = runTool(['eval', '--code', 'return ' + code]);
@@ -68,8 +62,8 @@ function probeArtifact(path, probeBody) {
     '  if (!localEson) { localEson = g.ESON; }',
     '  var out = {',
     '    jsonSame: after.json === before.json,',
-    '    parseSame: !!after.json && after.parse === before.parse,',
-    '    stringifySame: !!after.json && after.stringify === before.stringify',
+    '    parseSame: after.parse === before.parse,',
+    '    stringifySame: after.stringify === before.stringify',
     '  };',
     probeBody,
     '  return out;',
