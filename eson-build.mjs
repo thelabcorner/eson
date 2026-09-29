@@ -150,7 +150,7 @@ var ACCELERATOR = [
   '      cached = { ok: false, reason: (l && l.error) || "ESPAK load failed" };',
   '      return cached;',
   '    }',
-  '    var caps = ESON.enableNativeGate({ lib: l.lib, dllPath: l.path });',
+  '    var caps = ESON.enableNativeGate({ lib: l.lib, dllPath: l.path, owned: false });',
   '    cached = { ok: caps["native"] && caps["native"].enabled === true, caps: caps["native"], path: l.path };',
   '    return cached;',
   '  }',
@@ -173,40 +173,12 @@ var ACCELERATOR = [
   ''
 ].join('\n');
 
-// Lane C manifest sidecar (contract/manifest-schema-v1, pinned): the payload
-// + accel metadata espack embeds, in the exact schema shape espack-merge
-// consumes. Deterministic (fixed key order, no machine paths). Self-generated
-// here from the same DLL inputs espack embeds; smoke-tested byte-equality
-// against espack-build --manifest-out (Lane A) in the build validation.
-function espackManifest(bundleName, payloadDll, payloadName, payloadVersion, accelDll) {
-  var payloadBytes = readFileSync(payloadDll);
-  var payload = {
-    name: payloadName,
-    version: payloadVersion,
-    len: payloadBytes.length,
-    b64: payloadBytes.toString('base64'),
-    fileName: payloadName + '_v' + payloadVersion + '.dll'
-  };
-  var accel = null;
-  if (accelDll && existsSync(accelDll)) {
-    var accelBytes = readFileSync(accelDll);
-    accel = {
-      name: 'ESB64Native',
-      version: '2',
-      len: accelBytes.length,
-      b64: accelBytes.toString('base64'),
-      fileName: 'ESB64Native_v2.dll'
-    };
+function gitHead() {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch (ignore) {
+    return '';
   }
-  return {
-    format: 'espack-manifest',
-    version: 1,
-    bundleName: bundleName,
-    cacheDir: '',
-    chunkSize: 24576, // mirrors espack-build.mjs CHUNK_SIZE
-    accel: accel,
-    payloads: [payload]
-  };
 }
 
 function accelSkip(reason) {
@@ -216,7 +188,7 @@ function accelSkip(reason) {
   console.log('[eson-build] accel skipped: ' + reason);
 }
 
-function buildAccel() {
+async function buildAccel() {
   var espackBuild = join(ROOT, '..', 'espack', 'espack-build.mjs');
   var dll = join(ROOT, 'native', 'build', 'ESONJson.dll');
   // Explicitly pin the CURRENT ESTC-built esb64 runtime and the CURRENT
@@ -226,6 +198,7 @@ function buildAccel() {
   // re-enter this composite.
   var esb64Runtime = process.env.ESB64_RUNTIME_PATH || join(ROOT, '..', 'esb64', 'dist', 'vendor-esb64-runtime.js');
   var accelDll = process.env.ESB64_ACCEL_PATH || join(ROOT, '..', 'esb64', 'native', 'bin', 'ESB64Native.dll');
+  var esb64Manifest = join(ROOT, '..', 'esb64', 'dist', 'ESB64.manifest.json');
   if (!existsSync(espackBuild)) {
     return accelSkip('espack repo not found at ' + join(ROOT, '..', 'espack'));
   }
@@ -240,25 +213,76 @@ function buildAccel() {
     return accelSkip('ESB64 accelerator not found at ' + accelDll +
       ' (build ../esb64 first, or set ESB64_ACCEL_PATH)');
   }
-  var accelBundle = join(DIST, '.eson-accel-bundle.jsx');
-  execFileSync(process.execPath, [espackBuild, '--embed', dll, '--accel', accelDll, '--accel-version', '2', '--out', accelBundle,
-    '--name', 'eson', '--quiet'], {
-    stdio: 'inherit',
-    env: Object.assign({}, process.env, { ESB64_RUNTIME_PATH: esb64Runtime })
-  });
-  var bundleText = readFileSync(accelBundle, 'utf8');
+  if (!existsSync(esb64Manifest)) {
+    return accelSkip('ESB64 v2 composition manifest not found at ' + esb64Manifest +
+      ' (run ../esb64 npm run build:accel first)');
+  }
   var facadeText = readFileSync(join(DIST, 'ESON.jsx'), 'utf8');
-  // Lane C (merge architecture v1): emit the manifest sidecar (pinned schema
-  // contract/manifest-schema-v1) + the loader-free facade artifact for the
-  // composer. The standalone .accel.jsx below is unchanged in composition
-  // (bundle + facade + adapter; only the adapter's load call changed).
-  var manifest = espackManifest('eson', dll, 'ESONJson', '1', accelDll);
-  writeFileSync(join(DIST, 'ESON.manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   var facadeOut = facadeText + '\n' + ACCELERATOR +
     '// ESON.facade.jsx - loader-free facade + espack adapter (composer appends to a merged bundle; requires ESPAK on $.global)\n';
   writeFileSync(join(DIST, 'ESON.facade.jsx'), facadeOut);
-  var accelOut = bundleText + '\n' + facadeText + '\n' + ACCELERATOR +
-    '// ESON.accel.jsx - self-extracting single-file bundle (espack 1+n + ESON + native gate)\n';
+  var packageInfo = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  var esb64Package = JSON.parse(readFileSync(join(ROOT, '..', 'esb64', 'package.json'), 'utf8'));
+  var espackBuildApi = await import(new URL('../espack/espack-build.mjs', import.meta.url).href);
+  var espackMergeApi = await import(new URL('../espack/espack-merge.mjs', import.meta.url).href);
+  var espackLibraries = await import(new URL('../espack/espack-libraries.mjs', import.meta.url).href);
+  var payloadBytes = readFileSync(dll);
+  var accelBytes = readFileSync(accelDll);
+  var library = espackLibraries.libraryFromFile({
+    id: 'eson',
+    version: packageInfo.version,
+    global: 'ESON',
+    path: join(DIST, 'ESON.facade.jsx'),
+    requires: [{ id: 'esb64', range: '^' + esb64Package.version }],
+    contract: [
+      { name: 'parse', type: 'function' },
+      { name: 'stringify', type: 'function' },
+      { name: 'capabilities', type: 'function' }
+    ],
+    provenance: {
+      package: packageInfo.name,
+      repository: packageInfo.repository && packageInfo.repository.url,
+      commit: gitHead(),
+      artifact: 'dist/ESON.facade.jsx'
+    }
+  });
+  var ownManifest = espackBuildApi.makeManifest({
+    bundleName: 'eson',
+    cacheDir: '',
+    payloads: [{
+      name: 'ESONJson',
+      version: '1',
+      len: payloadBytes.length,
+      b64: payloadBytes.toString('base64'),
+      fileName: 'ESONJson_v1.dll'
+    }],
+    accel: {
+      name: 'ESB64Native',
+      version: '2',
+      len: accelBytes.length,
+      b64: accelBytes.toString('base64'),
+      fileName: 'ESB64Native_v2.dll'
+    },
+    libraries: [library],
+    entries: [{ id: 'eson', range: '=' + packageInfo.version }],
+    capabilities: [{
+      id: 'eson.native',
+      provider: 'eson',
+      mode: 'optional',
+      payloads: ['ESONJson'],
+      accel: null
+    }]
+  });
+  var composed = espackMergeApi.merge({
+    manifests: [esb64Manifest, ownManifest],
+    out: join(DIST, 'ESON.accel.jsx'),
+    manifestOut: join(DIST, 'ESON.manifest.json'),
+    name: 'eson',
+    entries: [{ id: 'eson', range: '=' + packageInfo.version }],
+    deferB64: true
+  });
+  var accelOut = composed.text +
+    '// ESON.accel.jsx - ESPACK v2 flattened ESB64 -> ESON composition with one loader/control plane\n';
   writeFileSync(join(DIST, 'ESON.accel.jsx'), accelOut);
   console.log('[eson-build] wrote ' + join(DIST, 'ESON.accel.jsx') + ' (' + accelOut.length + ' bytes)');
   minifyAccel(accelOut);
@@ -296,7 +320,7 @@ function minifyAccel(accelOut) {
 }
 
 if (process.argv.includes('--accel')) {
-  buildAccel();
+  await buildAccel();
 }
 
 console.log('[eson-build] wrote ' + join(DIST, 'ESON.jsx') + ', ' + join(DIST, 'vendor-eson.js') + ', ' +

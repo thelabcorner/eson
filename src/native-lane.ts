@@ -39,6 +39,7 @@ export interface NativeGateOptions {
              // espack load()); skips internal loading, keeps smoke +
              // certification
   dllPath?: string; // informational: where lib came from (reported in dll)
+  owned?: boolean; // true only when ESON owns the injected lib and may unload it
   provideLib?: () => any; // TEST HOOK ONLY: injects a fake lib in Node tests
 }
 
@@ -204,6 +205,7 @@ var state: {
   active: boolean;
   reason: string;
   lib: any;
+  owned: boolean;
   gate: GateFn | null;
   dll: string;
   dllVersion: number;
@@ -213,6 +215,7 @@ var state: {
   active: false,
   reason: '',
   lib: null,
+  owned: false,
   gate: null,
   dll: '',
   dllVersion: 0,
@@ -246,9 +249,11 @@ export function enableNativeGateState(options?: NativeGateOptions): EsonNativeCa
   if (opts.lib) {
     lib = opts.lib;
     state.dll = opts.dllPath || 'external';
+    state.owned = opts.owned === true;
   } else if (opts.provideLib) {
     try {
       lib = opts.provideLib();
+      state.owned = opts.owned === true;
     } catch (e) {
       lib = null;
     }
@@ -261,6 +266,7 @@ export function enableNativeGateState(options?: NativeGateOptions): EsonNativeCa
       var libName = opts.libName || 'ESONJson';
       lib = new ExternalObject('lib:' + libName);
       state.dll = libName;
+      state.owned = true;
     } catch (e) {
       lib = null;
       state.dll = opts.libName || 'ESONJson';
@@ -314,11 +320,12 @@ function jsxAuthority(text: string): boolean {
 
 function teardown(): EsonNativeCaps {
   try {
-    if (state.lib && typeof state.lib.unload === 'function') state.lib.unload();
+    if (state.owned && state.lib && typeof state.lib.unload === 'function') state.lib.unload();
   } catch (e) {
     // unload failure is not worth reporting over the enable failure
   }
   state.lib = null;
+  state.owned = false;
   state.gate = null;
   return snapshot();
 }
@@ -326,12 +333,13 @@ function teardown(): EsonNativeCaps {
 export function disableNativeGateState(): void {
   if (state.lib) {
     try {
-      state.lib.unload();
+      if (state.owned && typeof state.lib.unload === 'function') state.lib.unload();
     } catch (e) {
       // a loaded DLL stays locked until the session ends regardless
     }
   }
   state.lib = null;
+  state.owned = false;
   state.gate = null;
   state.active = false;
   state.reason = '';
@@ -364,6 +372,7 @@ function snapshot(): EsonNativeCaps {
     enabled: state.active,
     reason: state.reason,
     dll: state.dll,
+    owned: state.owned,
     dllVersion: state.dllVersion,
     certified: state.certified
   };

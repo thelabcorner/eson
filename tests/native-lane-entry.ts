@@ -226,10 +226,24 @@ function jsxGate(text: string): number {
   ok(c5.enabled === false, 'enable.loadFailure.rejected', c5.reason);
 
   // external lib injection (the espack path: options.lib is the instance)
-  var c6 = enableNativeGateState({ lib: makeFakeLib(), dllPath: 'C:/x/ESONJson_v1.dll' });
+  var borrowedUnloads = 0;
+  var borrowed = makeFakeLib();
+  borrowed.unload = function (): void { borrowedUnloads++; };
+  var c6 = enableNativeGateState({ lib: borrowed, dllPath: 'C:/x/ESONJson_v1.dll', owned: false });
   ok(c6.enabled === true && c6.certified > 0, 'enable.externalLib.enabled', JSON.stringify(c6));
   ok(c6.dll === 'C:/x/ESONJson_v1.dll', 'enable.externalLib.dllPath', String(c6.dll));
+  ok(c6.owned === false, 'enable.externalLib.borrowed', JSON.stringify(c6));
   disableNativeGateState();
+  ok(borrowedUnloads === 0, 'disable.borrowedDoesNotUnload', String(borrowedUnloads));
+
+  // direct/injected ownership can be transferred explicitly.
+  var ownedUnloads = 0;
+  var owned = makeFakeLib();
+  owned.unload = function (): void { ownedUnloads++; };
+  var c7 = enableNativeGateState({ lib: owned, dllPath: 'C:/x/ESONJson_owned.dll', owned: true });
+  ok(c7.enabled === true && c7.owned === true, 'enable.externalLib.owned', JSON.stringify(c7));
+  disableNativeGateState();
+  ok(ownedUnloads === 1, 'disable.ownedUnloadsOnce', String(ownedUnloads));
 })();
 
 // ------------------------------------------------------------------- report

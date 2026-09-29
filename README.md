@@ -55,6 +55,21 @@ Deterministic random streams and sampling for ExtendScript.
 **[ESUUID](https://github.com/thelabcorner/es-uuid)**  
 RFC 9562 UUID generation, parsing, and conversion for ExtendScript.
 
+**[ESENV](https://github.com/thelabcorner/es-env)**  
+Environment and capability detection for ExtendScript.
+
+**[ESPATH](https://github.com/thelabcorner/es-path)**  
+Deterministic Windows/POSIX path and RFC 8089 file-URI transformations.
+
+**[ESFS](https://github.com/thelabcorner/es-fs)**  
+Synchronous ExtendScript File/Folder I/O with explicit text, BINARY, and replacement semantics.
+
+**[ESHASH](https://github.com/thelabcorner/es-hash)**  
+CRC-32/ISO-HDLC and SHA-256 for byte strings and UTF-8 text.
+
+**[ESLOG](https://github.com/thelabcorner/es-log)**  
+Structured logging with bounded text and JSONL sinks.
+
 </td>
 <td width="50%" valign="top">
 
@@ -80,6 +95,9 @@ Native state and durable storage for Adobe tooling.
 
 **[COMTool](https://github.com/thelabcorner/COMTool)**  
 Guarded COM, ExtendScript, plug-in, and debugger automation for Adobe desktop apps.
+
+**ESsemble** <sub>coming soon</sub>  
+Typed framework, resolver, and composition layer for the ExtendScript toolkit.
 
 **ESOBF** <sub>coming soon</sub>  
 Obfuscation for hardened JSX distribution.
@@ -809,15 +827,29 @@ Measured (30.6.0, live): cold parse at ~49 KB — gate ON ~82 ms vs gate OFF
 RFC-exact native verdict + single-file delivery. The espack delivery
 overhead (measured, same host):
 
-**Merge architecture (espack v0.3.0).** The build also emits two composition
-artifacts for hosts that bundle multiple espack consumers in one file (e.g.
-ArcFit): `dist/ESON.manifest.json` (schema v1, payload-only, byte-identical
-to `espack-build --manifest-out`) and `dist/ESON.facade.jsx` (loader-free
-facade + adapter, requires `ESPAK` on `$.global`). A composer merges the
-manifests with `espack-merge.mjs` into ONE loader and appends the facades.
-The adapter loads the payload **by name** (`ESPAK.load("ESONJson")`) — index
-0 is not a stable API under a merged bundle. The standalone `ESON.accel.jsx`
-is unchanged in composition.
+**Runtime-composition architecture (ESPACK v0.5.0).** The build emits a
+manifest-v2 library node plus a loader-free facade and resolves the complete
+`ESB64 -> ESON` dependency graph through `espack-merge.mjs`. The generated
+`dist/ESON.manifest.json` records:
+
+- exact ESB64 and ESON facade bytes + SHA-256 provenance;
+- the semantic requirement `eson -> esb64 ^1.3.0`;
+- the `ESONJson` native payload and the shared `ESB64Native` accelerator;
+- explicit activation contracts and the optional `eson.native` capability;
+- the ESPACK composer version that generated the distribution.
+
+`dist/ESON.accel.jsx` is therefore one flattened distribution with **one
+ESPAK loader/control plane**, not a nested ESB64 accelerator bundle plus an
+ESON bundle. The adapter continues to load the payload **by name**
+(`ESPAK.load("ESONJson")`) because index 0 is never a stable cross-library
+API.
+
+The ExternalObject returned by ESPAK is **borrowed** by ESON
+(`owned:false`). ESON may disable its native gate without unloading the
+shared ESPACK-owned object. Direct `enableNativeGate({dir})` construction
+remains ESON-owned and unloadable. This ownership distinction is unit-tested
+and prevents one composed facade from invalidating a native object shared by
+other consumers.
 
 | Operation | Cost |
 |---|---|

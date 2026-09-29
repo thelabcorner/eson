@@ -9,15 +9,14 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createLegacyComToolV2Runner } from '../../extendscript-toolchain/src/comtool-v2-compat.mjs';
+import { createComToolRunner } from '../../extendscript-toolchain/src/comtool-compat.mjs';
 
 var ROOT = dirname(fileURLToPath(import.meta.url));
 var argBundle = null;
 var ai = process.argv.indexOf('--bundle');
 if (ai >= 0 && process.argv[ai + 1]) argBundle = process.argv[ai + 1];
 var ACCEL = argBundle || join(ROOT, '..', 'dist', 'ESON.accel.jsx');
-var COM = createLegacyComToolV2Runner();
-process.on('exit', function () { try { COM.close(); } catch (ignore) {} });
+var COM = createComToolRunner();
 
 if (!existsSync(ACCEL)) {
   console.error('accel-live: build first (npm run build:accel) - ' + ACCEL + ' missing');
@@ -28,31 +27,31 @@ function check(name, cond, detail) {
   if (cond) console.log('ok   ' + name);
   else { failures++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
-function runTool(args, timeoutMs) {
+async function runTool(args, timeoutMs) {
   return COM.run(args, { timeoutMs: timeoutMs || 180000 });
 }
-function evalFile(path) {
+async function evalFile(path) {
   // Load through $.evalFile inside one V2 code turn: this is the real consumer
   // path and keeps bundle load + subsequent state inspection in one engine.
   var p = path.replace(/\\/g, '/');
-  var env = runTool(['eval', '--code', "return (function () { $.evalFile(new File('" + p + "')); return true; }());"]);
+  var env = await runTool(['eval', '--code', "return (function () { $.evalFile(new File('" + p + "')); return true; }());"]);
   if (!env.ok) throw new Error('eval failed: ' + JSON.stringify(env).slice(0, 1500));
   return env.result;
 }
-function evalCode(code) {
-  var env = runTool(['eval', '--code', 'return ' + code]);
+async function evalCode(code) {
+  var env = await runTool(['eval', '--code', 'return ' + code]);
   if (!env.ok) throw new Error('eval failed: ' + JSON.stringify(env).slice(0, 1500));
   return env.result;
 }
 
 // Launch an automation instance if none is COM-reachable.
-var pre = runTool(['status']);
+var pre = await runTool(['status']);
 if (!pre.ok) {
-  pre = runTool(['status', '--launch'], 90000);
+  pre = await runTool(['status', '--launch'], 90000);
 }
-check('instance reachable (' + pre.result.Version + ')', pre.ok && !pre.result.DocumentsCount);
+check('instance reachable (' + pre.result.Version + ')', pre.ok === true && !!pre.result);
 
-evalFile(ACCEL);
+await evalFile(ACCEL);
 
 var probe = [
   '(function () {',
@@ -97,7 +96,7 @@ var probe = [
   '}());'
 ].join('\n');
 
-var r = evalCode(probe);
+var r = await evalCode(probe);
 check('bundle evals, ESPAK + ESON on $.global', r.hasEspak === true && r.hasEson === true, r.error);
 check('ESPAK native mode', r.espakMode === 'native', r.espakMode);
 check('ESON.useEspack installed', r.useEspackType === 'function', r.useEspackType);
@@ -116,4 +115,5 @@ console.log('      timings: gate ON ' + r.timings.gateOnUs + ' us, gate OFF ' + 
   (r.timings.gateOffUs > 0 ? (r.timings.gateOffUs / r.timings.gateOnUs).toFixed(1) + 'x' : 'n/a'));
 
 console.log('\naccel-live: ' + (failures ? failures + ' failure(s)' : 'ALL CHECKS PASSED'));
-process.exit(failures ? 1 : 0);
+await COM.close();
+process.exitCode = failures ? 1 : 0;

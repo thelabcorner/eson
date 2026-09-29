@@ -1,6 +1,6 @@
 {
   "name": "eson",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "ESON — ExtendScript Object Notation: a strict JSON parser/stringify library for ExtendScript (ES3) engines",
   "type": "module",
   "main": "dist/eson-core.esm.mjs",
@@ -17,8 +17,8 @@
     "fuzz": "node tests/fuzz.mjs 100000",
     "typecheck": "npx tsc --noEmit -p .",
     "benchmark": "node tests/benchmark.mjs",
-    "estc:check": "node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.jsx --no-target && node ../extendscript-toolchain/bin/estc.mjs check dist/vendor-eson.js --no-target && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON-runtime.jsx --no-target && node ../extendscript-toolchain/bin/estc.mjs check dist/vendor-eson-runtime.js --no-target && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.facade.jsx --no-target && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.accel.jsx --no-target && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.accel.min.jsx --no-target",
-    "estc:live": "node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.jsx --no-target --live --launch && node ../extendscript-toolchain/bin/estc.mjs check dist/vendor-eson.js --no-target --live --launch && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON-runtime.jsx --no-target --live --launch && node ../extendscript-toolchain/bin/estc.mjs check dist/vendor-eson-runtime.js --no-target --live --launch && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.facade.jsx --no-target --live --launch && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.accel.jsx --no-target --live --launch && node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.accel.min.jsx --no-target --live --launch",
+    "estc:check": "node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.jsx dist/vendor-eson.js dist/ESON-runtime.jsx dist/vendor-eson-runtime.js dist/ESON.facade.jsx dist/ESON.accel.jsx dist/ESON.accel.min.jsx --no-target",
+    "estc:live": "node ../extendscript-toolchain/bin/estc.mjs check dist/ESON.jsx dist/vendor-eson.js dist/ESON-runtime.jsx dist/vendor-eson-runtime.js dist/ESON.facade.jsx dist/ESON.accel.jsx dist/ESON.accel.min.jsx --no-target --live --launch",
     "verify": "npm run typecheck && npm run build && npm test && npm run test:vendor && npm run test:poly",
     "live-verify": "node tests/eson-live-verify.mjs",
     "live-artifacts": "node tests/eson-artifacts-live.mjs",
@@ -26,7 +26,10 @@
     "release:gate": "npm run verify && npm run fuzz && npm run build:accel:strict && npm run estc:check && npm run estc:live && npm run live-verify && npm run live-artifacts && npm run accel-live",
     "release:integration": "npm run vendor-sync && npm run vendor-sync-check",
     "prepublishOnly": "npm run release:gate",
-    "native-build": "powershell -ExecutionPolicy Bypass -File native/build.ps1"
+    "native-build": "powershell -ExecutionPolicy Bypass -File native/build.ps1",
+    "verify:engine": "npm run estc:live && npm run live-artifacts && npm run accel-live",
+    "ci:static": "npm run verify",
+    "ci:local": "npm run ci:static && npm run verify:engine"
   },
   "devDependencies": {
     "esbuild": "^0.28.1",

@@ -48,6 +48,7 @@ export interface EsonNativeCaps {
   enabled: boolean; // native gate certified and active
   reason: string; // disabled reason ('' when enabled)
   dll: string; // DLL name that was loaded
+  owned: boolean; // whether ESON owns the ExternalObject and may unload it
   dllVersion: number; // ESGetVersion value
   certified: number; // parity corpus cases certified at enable
 }

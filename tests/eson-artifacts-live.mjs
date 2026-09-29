@@ -13,12 +13,11 @@
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createLegacyComToolV2Runner } from '../../extendscript-toolchain/src/comtool-v2-compat.mjs';
+import { createComToolRunner } from '../../extendscript-toolchain/src/comtool-compat.mjs';
 
 var ROOT = dirname(fileURLToPath(import.meta.url));
 var DIST = join(ROOT, '..', 'dist');
-var COM = createLegacyComToolV2Runner();
-process.on('exit', function () { try { COM.close(); } catch (ignore) {} });
+var COM = createComToolRunner();
 
 var files = {
   standalone: join(DIST, 'ESON.jsx'),
@@ -38,23 +37,25 @@ function check(name, cond, detail) {
   if (cond) console.log('ok   ' + name);
   else { failures++; console.log('FAIL ' + name + (detail ? '  ' + detail : '')); }
 }
-function runTool(args, timeoutMs) {
+async function runTool(args, timeoutMs) {
   return COM.run(args, { timeoutMs: timeoutMs || 180000 });
 }
-function evalCode(code) {
-  var env = runTool(['eval', '--code', 'return ' + code]);
+async function evalCode(code) {
+  var env = await runTool(['eval', '--code', 'return ' + code]);
   if (!env.ok) throw new Error('eval failed: ' + JSON.stringify(env).slice(0, 1500));
   return env.result;
 }
 
 // One eval call per artifact: snapshot -> $.evalFile -> snapshot -> probes.
-function probeArtifact(path, probeBody) {
+async function probeArtifact(path, probeBody) {
   var p = path.replace(/\\/g, '/');
   var code = [
     '(function () {',
     '  var g = $.global;',
     '  function tryParse(fn, text) { try { fn(text); return false; } catch (e) { return true; } }',
+    '  var hadJson = Object.prototype.hasOwnProperty.call(g, "JSON");',
     '  var before = { json: g.JSON, parse: g.JSON && g.JSON.parse, stringify: g.JSON && g.JSON.stringify };',
+    '  try {',
     '  $.evalFile(new File(' + JSON.stringify(p) + '));',
     '  var after = { json: g.JSON, parse: g.JSON && g.JSON.parse, stringify: g.JSON && g.JSON.stringify };',
     '  var localEson = null;',
@@ -67,20 +68,26 @@ function probeArtifact(path, probeBody) {
     '  };',
     probeBody,
     '  return out;',
+    '  } finally {',
+    '    if (hadJson) {',
+    '      g.JSON = before.json;',
+    '      if (g.JSON) { g.JSON.parse = before.parse; g.JSON.stringify = before.stringify; }',
+    '    } else { try { delete g.JSON; } catch (restoreError) { g.JSON = void 0; } }',
+    '  }',
     '}());'
   ].join('\n');
   return evalCode(code);
 }
 
 // Launch an automation instance if none is COM-reachable.
-var pre = runTool(['status']);
+var pre = await runTool(['status']);
 if (!pre.ok) {
-  pre = runTool(['status', '--launch'], 90000);
+  pre = await runTool(['status', '--launch'], 90000);
 }
 check('instance reachable (' + pre.result.Version + ')', pre.ok === true, JSON.stringify(pre).slice(0, 400));
 
 // ---- 1. dist/ESON.jsx: facade only, global JSON untouched -------------------
-var r1 = probeArtifact(files.standalone, [
+var r1 = await probeArtifact(files.standalone, [
   '  out.facade = !!localEson && typeof localEson.parse === "function" && typeof localEson.stringify === "function";',
   '  out.fullApi = typeof localEson.encodeSource === "function" && typeof localEson.capabilities === "function";',
   '  out.strict01 = tryParse(localEson.parse, "[01]");',
@@ -96,7 +103,7 @@ check('ESON.jsx leaves the global JSON object identical',
   JSON.stringify({ jsonSame: r1.jsonSame, parseSame: r1.parseSame, stringifySame: r1.stringifySame }));
 
 // ---- 2. dist/vendor-eson.js: installs the global JSON = ESON ----------------
-var r2 = probeArtifact(files.vendor, [
+var r2 = await probeArtifact(files.vendor, [
   '  out.parseIsEson = !!g.JSON && !!localEson && g.JSON.parse === localEson.parse;',
   '  out.stringifyIsEson = !!g.JSON && !!localEson && g.JSON.stringify === localEson.stringify;',
   '  out.strict01 = tryParse(g.JSON.parse, "[01]");',
@@ -112,7 +119,7 @@ check('vendor-eson.js strict verdicts (01, bare key, 1.)', r2.strict01 === true 
 check('vendor-eson.js reviver + deep parse + stringify', r2.reviver === true && r2.deep === true && r2.stringify === true);
 
 // ---- 3. dist/ESON-runtime.jsx: runtime facade only, no install --------------
-var r3 = probeArtifact(files.runtime, [
+var r3 = await probeArtifact(files.runtime, [
   '  out.facade = !!localEson && typeof localEson.parse === "function" && typeof localEson.stringify === "function";',
   '  out.runtimeOnly = typeof localEson.encodeSource === "undefined" && typeof localEson.capabilities === "undefined" && typeof localEson.parseTrusted === "undefined";',
   '  out.strict = tryParse(localEson.parse, "[01]");',
@@ -126,7 +133,7 @@ check('ESON-runtime.jsx leaves the global JSON object identical',
   JSON.stringify({ jsonSame: r3.jsonSame, parseSame: r3.parseSame, stringifySame: r3.stringifySame }));
 
 // ---- 4. dist/vendor-eson-runtime.js: runtime + install ----------------------
-var r4 = probeArtifact(files.runtimeVendor, [
+var r4 = await probeArtifact(files.runtimeVendor, [
   '  out.parseIsEson = !!g.JSON && !!localEson && g.JSON.parse === localEson.parse;',
   '  out.stringifyIsEson = !!g.JSON && !!localEson && g.JSON.stringify === localEson.stringify;',
   '  out.runtimeOnly = typeof localEson.encodeSource === "undefined" && typeof localEson.capabilities === "undefined";',
@@ -137,4 +144,5 @@ check('vendor-eson-runtime.js installs + runtime-only surface', r4.parseIsEson =
 check('vendor-eson-runtime.js strict + behavior', r4.strict === true && r4.value === true);
 
 console.log('\nartifacts-live: ' + (failures ? failures + ' failure(s)' : 'ALL CHECKS PASSED'));
-process.exit(failures ? 1 : 0);
+await COM.close();
+process.exitCode = failures ? 1 : 0;
