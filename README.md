@@ -11,7 +11,7 @@
 [![Differential: V8 native](https://img.shields.io/badge/differential-vs%20V8%20native%20330k%2B%20iters-purple)](https://github.com/nst/JSONTestSuite)
 [![Adobe: Creative Suite](https://img.shields.io/badge/Adobe%20-Creative%20Suite-red?logo=adobe&logoColor=white)](https://extendscript.docsforadobe.dev/)
 [![Engine](https://img.shields.io/badge/ExtendScript-ES3-green)](#compatibility)
-[![Size](https://img.shields.io/badge/runtime-8.1%20KB-orange)](#installation)
+[![Size](https://img.shields.io/badge/runtime-6.9%20KB-orange)](#installation)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL%203.0--or--later-blue)](https://www.gnu.org/licenses/gpl-3.0.html)
 
 </div>
@@ -171,7 +171,7 @@ ESON is the strict answer: a **drop-in replacement for `JSON.parse` / `JSON.stri
 - **Fast in the ES3 engine:** ~1.6× faster cold parse than json2 at 43 KB, ~385× faster on repeat parses via an 8-entry verdict memo (47.7 ms cold → 124 µs).
 - **Preserves more than JSON when you need it:** the trusted lane (`encodeSource` / `decodeSourceTrusted`) round-trips `undefined`, `NaN`, `Infinity`, functions, dates and sparse arrays in ~26 µs.
 - **Certified, not claimed:** JSONTestSuite 95/95 + 188/188 + 35/35 with zero V8 divergence; 630 Node assertions + 37 native-lane; 129/129 oracle/gate parity checks; 36/36 byte-equal differential vs the JSON2 reference with a live probe report.
-- **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 8.1 KB; the full `ESON.jsx` is 38.3 KB (the difference is the trusted codec, fast lane, capability probing and the opt-in native gate module - all pruned from the runtime build by tree-shaking).
+- **Slim runtime build:** the tree-shaken runtime vendor (`vendor-eson-runtime.js`) is 6.9 KB; the full `ESON.jsx` is 36.6 KB (the difference is the trusted codec, fast lane, capability probing and the opt-in native gate module - all pruned from the runtime build by tree-shaking).
 
 ---
 
@@ -183,7 +183,7 @@ stringify; the difference is everything else.
 | | **Runtime build** | **Full build** |
 |---|---|---|
 | Files | `vendor-eson-runtime.js`¹ | `vendor-eson.js`, `ESON.jsx` |
-| Size | 8.1 KB | 38.3 KB (ESON.jsx) / 38.4 KB (vendor-eson.js) |
+| Size | 6.9 KB | 36.6 KB (ESON.jsx) / 36.7 KB (vendor-eson.js) |
 | API | `parse`, `stringify` only | full facade: `parse`, `stringify`, `parseTrusted`, `stringifyFast`, `encodeSource` / `decodeSourceTrusted`, `decodeSourceChecked`, `enableNativeGate` / `disableNativeGate`, `capabilities`, `install`, `loadJson2Api` (provisioning helper), `benchmark` |
 | Installs global `JSON` | yes (vendor variant) | yes (vendor variant) |
 | Best for | high-frequency automation, per-eval injection, anything that only needs strict `JSON.parse` / `JSON.stringify` | plugins and long-lived scripts that also need the trusted codec, certified fast lane, the ExternalObject-accelerated gate, capability probing, or benchmark tooling |
@@ -386,7 +386,7 @@ ESON facade
 **How it works, in three steps:**
 
 1. Open the [Releases page](https://github.com/thelabcorner/eson/releases).
-2. Pick the **latest stable** tag (top of the list — today that is `v1.2.2`).
+2. Pick the **latest stable** tag.
 3. Download the asset that matches your use case:
 
 | You are... | Take this release | And this asset |
@@ -394,7 +394,8 @@ ESON facade
 | A script/plugin that needs strict `JSON.parse` / `JSON.stringify` | **Latest stable** | `vendor-eson.js` — drop-in vendor, installs the global |
 | A facade-only script (leave the global alone) | Latest stable | `ESON.jsx` — bannerless IIFE, defines `ESON` |
 | Self-extracting native-gate bundle (Windows x64) | Latest stable | `ESON.accel.jsx` — espack single-file bundle (ESONJson.dll payload + shared esb64 accelerator) |
-| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` - 8.1 KB, parse/stringify only |
+| Composing ESON into an existing ESPACK runtime | Latest stable | `ESON.facade.jsx` + `ESON.manifest.json` — manifest-v2 composition inputs |
+| High-frequency automation / per-eval injection | Latest stable | `vendor-eson-runtime.js` - 6.9 KB, parse/stringify only |
 | Node.js testing / tooling | Latest stable | `eson-core.esm.mjs` — ESM core (25 exports) |
 | Differential probes / verification | Latest stable | `json2-reference.jsx` — raw json2 reference lane |
 | A fix that isn't released yet | Pre-release / `master` | Build from source: `npm run build` |
